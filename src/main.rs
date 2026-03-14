@@ -126,7 +126,9 @@ fn cmd_scan(db: Database, path: &std::path::Path, verbose: bool) -> Result<()> {
     if s.errors > 0 {
         println!("  {} errores", s.errors.to_string().red());
     }
-
+    println!("  {}", "──────────────────────────────────────".dimmed());
+    println!("  {} indexados en total", s.total_indexed().to_string().cyan().bold());
+ 
     Ok(())
 }
 

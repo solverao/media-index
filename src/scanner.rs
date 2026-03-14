@@ -65,11 +65,19 @@ impl Scanner {
 
             // ── Archivo de media directo ───────────────────────────────────
             if let Some(media_type) = MediaType::from_extension(&ext) {
-                let mut s = stats.lock().unwrap();
-                if let Err(e) = self.process_path(path, &ext, &media_type, None, &mut s) {
-                    s.errors += 1;
-                    if self.verbose {
-                        eprintln!("  {} {}: {e}", "✗".red(), path.display());
+                // Trabajo pesado SIN lock: leer, hashear, parsear
+                match self.build_entry(path, &ext, &media_type) {
+                    Ok(entry) => {
+                        // Lock breve: solo insertar en BD + actualizar stats
+                        let mut s = stats.lock().unwrap();
+                        self.insert_entry(entry, &mut s);
+                    }
+                    Err(e) => {
+                        let mut s = stats.lock().unwrap();
+                        s.errors += 1;
+                        if self.verbose {
+                            eprintln!("  {} {}: {e}", "✗".red(), path.display());
+                        }
                     }
                 }
                 pb.inc(1);
@@ -87,20 +95,25 @@ impl Scanner {
                     if !name_lower.ends_with(".001") { pb.inc(1); return; }
                 }
 
+                // Trabajo pesado SIN lock: extraer + construir entries
                 match extract_media_files(path, &archive_type) {
                     Ok(files) => {
-                        let mut s = stats.lock().unwrap();
-                        s.archives_opened += 1;
-
-                        for extracted in files {
-                            if let Some(mt) = MediaType::from_extension(&extracted.ext) {
-                                let entry = build_entry_from_memory(
+                        let built: Vec<MediaEntry> = files.into_iter()
+                            .filter_map(|extracted| {
+                                let mt = MediaType::from_extension(&extracted.ext)?;
+                                Some(build_entry_from_memory(
                                     &extracted.data, &extracted.name,
                                     &extracted.ext, &mt,
                                     path.to_string_lossy().as_ref(),
-                                );
-                                self.insert_entry(entry, &mut s);
-                            }
+                                ))
+                            })
+                            .collect();
+
+                        // Lock breve: insertar todo el batch
+                        let mut s = stats.lock().unwrap();
+                        s.archives_opened += 1;
+                        for entry in built {
+                            self.insert_entry(entry, &mut s);
                         }
                     }
                     Err(e) => {
@@ -120,42 +133,36 @@ impl Scanner {
         Ok(Arc::try_unwrap(stats).unwrap().into_inner().unwrap())
     }
 
-    // ── Procesar un archivo en disco ──────────────────────────────────────
+    // ── Construir entry sin tocar BD ni stats (trabajo pesado) ────────────
 
-    fn process_path(
+    fn build_entry(
         &self,
         path:       &Path,
         ext:        &str,
         media_type: &MediaType,
-        archive:    Option<&str>,
-        stats:      &mut ScanStats,
-    ) -> Result<()> {
-        let size = std::fs::metadata(path)?.len();
-        let hash = hash_file(path, size)?;
+    ) -> Result<MediaEntry> {
+        let size     = std::fs::metadata(path)?.len();
+        let hash     = hash_file(path, size)?;
         let path_str = path.to_string_lossy().to_string();
-        let name = path.file_name()
+        let name     = path.file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        // Para video: parsear metadatos desde el path (no necesita cargar en RAM)
         let metadata = match media_type {
             MediaType::Video => {
-                crate::models::Metadata::Video(
-                    crate::parsers::video::parse_from_path(&path_str)
-                )
+                Metadata::Video(parsers::video::parse_from_path(&path_str))
             }
-            // Para los demás, cargar datos si el archivo no es demasiado grande
             _ => {
                 if size <= PARTIAL_HASH_THRESHOLD {
                     let data = std::fs::read(path)?;
                     parsers::parse(&data, ext, media_type, &path_str)
                 } else {
-                    crate::models::Metadata::None
+                    Metadata::None
                 }
             }
         };
 
-        let entry = MediaEntry {
+        Ok(MediaEntry {
             blake3_hash:     hash,
             size_bytes:      size,
             original_name:   name,
@@ -163,13 +170,12 @@ impl Scanner {
             extension:       ext.to_string(),
             media_type:      media_type.clone(),
             metadata,
-            source_archive:  archive.map(str::to_string),
+            source_archive:  None,
             path_in_archive: None,
-        };
-
-        self.insert_entry(entry, stats);
-        Ok(())
+        })
     }
+
+    // ── Insertar en BD + actualizar stats (trabajo rápido, bajo lock) ─────
 
     fn insert_entry(&self, entry: MediaEntry, stats: &mut ScanStats) {
         let media_type = entry.media_type.clone();
