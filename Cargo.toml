@@ -1,0 +1,65 @@
+[package]
+name = "media-index"
+version = "0.1.0"
+edition = "2024"
+description = "Indexador y deduplicador de archivos 3D, video, audio e imagen"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Hashing rápido
+blake3 = "1"
+
+# Traversal
+walkdir = "2"
+
+# SQLite embebida
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Descompresión
+zip         = "2"
+sevenz-rust = "0.6"
+
+# Paralelismo
+rayon = "1"
+
+# Progress
+indicatif = { version = "0.17", features = ["rayon"] }
+
+# Errores
+anyhow    = "1"
+thiserror = "1"
+
+# Serialización
+serde      = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Fechas
+chrono = { version = "0.4", features = ["serde"] }
+
+# Parser XML (3MF)
+quick-xml = "0.36"
+
+# Terminal
+colored   = "2"
+humansize = "2"
+
+# ── Media ────────────────────────────────────────────────────
+# Audio: tags + duración (MP3, FLAC, OGG, M4A, WAV, AIFF…)
+lofty = "0.22"
+
+# Imagen: dimensiones + EXIF
+image         = { version = "0.25", default-features = false, features = ["jpeg","png","webp","tiff","bmp","gif"] }
+# kamadak-exif  = "0.5"
+exif = { package = "kamadak-exif", version = "0.5" }
+
+# Video: se usa ffprobe como subproceso (ver parsers/video.rs)
+# No requiere crate extra
+
+[profile.release]
+opt-level     = 3
+lto           = true
+codegen-units = 1
+strip         = true
+
