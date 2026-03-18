@@ -244,6 +244,63 @@ impl Database {
         Ok(())
     }
 
+    // ── Mantenimiento ─────────────────────────────────────────────────────
+
+    /// Elimina entradas cuyo path ya no existe en disco.
+    /// Debe llamarse al inicio de cada escaneo para que los duplicados
+    /// borrados manualmente no persistan en la BD.
+    ///
+    /// Devuelve (archivos_canónicos_eliminados, duplicados_eliminados).
+    pub fn cleanup_stale(&self) -> Result<(usize, usize)> {
+        // 1. Duplicados cuyo duplicate_path ya no existe
+        let dup_paths: Vec<(i64, String)> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, duplicate_path FROM duplicates"
+            )?;
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+
+        let mut dupes_removed = 0usize;
+        for (id, path) in &dup_paths {
+            // Ignorar entradas de archivos dentro de .zip/.rar (contienen "::")
+            if path.contains("::") { continue; }
+            if !std::path::Path::new(path).exists() {
+                self.conn.execute(
+                    "DELETE FROM duplicates WHERE id = ?1",
+                    rusqlite::params![id],
+                )?;
+                dupes_removed += 1;
+            }
+        }
+
+        // 2. Archivos canónicos cuyo current_path ya no existe
+        // (ON DELETE CASCADE limpia duplicates + meta_* automáticamente)
+        let file_paths: Vec<(i64, String)> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, current_path FROM files"
+            )?;
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+
+        let mut files_removed = 0usize;
+        for (id, path) in &file_paths {
+            if path.contains("::") { continue; }
+            if !std::path::Path::new(path).exists() {
+                self.conn.execute(
+                    "DELETE FROM files WHERE id = ?1",
+                    rusqlite::params![id],
+                )?;
+                files_removed += 1;
+            }
+        }
+
+        Ok((files_removed, dupes_removed))
+    }
+
     // ── Consultas ─────────────────────────────────────────────────────────
 
     pub fn stats(&self) -> Result<DbStats> {

@@ -65,6 +65,13 @@ enum Commands {
 
     /// Verificar dependencias opcionales
     Doctor,
+
+    /// Borrar toda la base de datos (pide confirmación)
+    Clear {
+        /// No pedir confirmación (útil en scripts)
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 #[derive(Clone, ValueEnum)]
@@ -85,7 +92,13 @@ impl MediaTypeArg {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let db  = Database::open(&cli.db)?;
+
+    // Clear no necesita abrir (ni crear) la BD
+    if let Commands::Clear { force } = cli.command {
+        return cmd_clear(&cli.db, force);
+    }
+
+    let db = Database::open(&cli.db)?;
 
     match cli.command {
         Commands::Scan { path, verbose } => cmd_scan(db, &path, verbose),
@@ -94,6 +107,7 @@ fn main() -> Result<()> {
         Commands::Search { query, tipo } => cmd_search(db, &query, tipo),
         Commands::Export { output }      => cmd_export(db, &output),
         Commands::Doctor                  => cmd_doctor(),
+        Commands::Clear { .. }           => unreachable!(),
     }
 }
 
@@ -322,6 +336,37 @@ fn cmd_doctor() -> Result<()> {
     );
 
     println!("\n  {} ZIP, 7Z, audio, imagen: pure Rust — sin dependencias", "✓".green());
+    Ok(())
+}
+
+fn cmd_clear(db_path: &str, force: bool) -> Result<()> {
+    if !force {
+        println!(
+            "{} Esto borrará {} por completo y no se puede deshacer.",
+            "⚠".yellow().bold(),
+            db_path.bold(),
+        );
+        print!("  ¿Continuar? [s/N] ");
+        std::io::Write::flush(&mut std::io::stdout())?;
+
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+
+        if !matches!(input.trim().to_lowercase().as_str(), "s" | "si" | "sí" | "y" | "yes") {
+            println!("{}", "Cancelado.".dimmed());
+            return Ok(());
+        }
+    }
+
+    // Borrar el archivo .db y el WAL / SHM si existen
+    for suffix in ["", "-wal", "-shm"] {
+        let path = format!("{db_path}{suffix}");
+        if std::path::Path::new(&path).exists() {
+            std::fs::remove_file(&path)?;
+        }
+    }
+
+    println!("{} Base de datos eliminada: {}", "✓".green(), db_path.bold());
     Ok(())
 }
 

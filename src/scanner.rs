@@ -31,6 +31,22 @@ impl Scanner {
     pub fn scan(&self, root: &Path) -> Result<ScanStats> {
         let stats = Arc::new(Mutex::new(ScanStats::default()));
 
+        // Limpiar entradas obsoletas antes de escanear, para que los archivos
+        // borrados manualmente no aparezcan como duplicados en el siguiente escaneo.
+        {
+            let db = self.db.lock().unwrap();
+            match db.cleanup_stale() {
+                Ok((files, dupes)) if files > 0 || dupes > 0 => {
+                    println!(
+                        "{}  Limpieza: {} canónico(s) y {} duplicado(s) eliminados de la BD (ya no existen en disco)",
+                        "🧹", files, dupes
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("Advertencia: Error en limpieza de BD: {e}"),
+            }
+        }
+
         println!("{}", "Recolectando archivos...".cyan());
 
         let entries: Vec<PathBuf> = WalkDir::new(root)
