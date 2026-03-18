@@ -301,6 +301,28 @@ impl Database {
         Ok((files_removed, dupes_removed))
     }
 
+    /// Devuelve true si TODOS los archivos indexados del comprimido son duplicados.
+    /// Se usa para decidir si se puede borrar el comprimido entero en modo --aggressive.
+    pub fn all_contents_are_duplicates(&self, archive_path: &str) -> Result<bool> {
+        // Archivos del comprimido que están como canónicos en `files`
+        let canonical_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM files WHERE source_archive = ?1",
+            params![archive_path],
+            |r| r.get(0),
+        )?;
+
+        // Archivos del comprimido que están en `duplicates`
+        let dup_count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM duplicates WHERE duplicate_path LIKE ?1",
+            params![format!("{archive_path}::%")],
+            |r| r.get(0),
+        )?;
+
+        // El comprimido es prescindible si no tiene ningún canónico propio
+        // y al menos tiene algún duplicado registrado
+        Ok(canonical_count == 0 && dup_count > 0)
+    }
+
     // ── Consultas ─────────────────────────────────────────────────────────
 
     pub fn stats(&self) -> Result<DbStats> {

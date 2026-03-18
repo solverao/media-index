@@ -187,3 +187,45 @@ $videos = DB::connection('media_index')
     ->select('f.*', 'v.duration_secs', 'v.width', 'v.height', 'v.codec_video')
     ->get();
 ```
+
+## Eliminar 
+
+### Solo listar (como siempre)
+media-index dupes
+
+### Borrar duplicados sueltos, reportar los que están en comprimidos
+media-index dupes --delete
+
+### Borrar sueltos + borrar comprimidos donde TODO es duplicado
+media-index dupes --delete --aggressive
+
+### Filtrar por tipo
+media-index dupes --delete --tipo video
+```
+
+#### Comportamiento
+
+**Sin `--aggressive`** — solo toca archivos en disco:
+```
+✓ /fotos/backup/imagen.jpg
+⊡ /backups/archivo.zip::imagen.jpg   ← reportado, no tocado
+⊡ /backups/otro.zip::video.mp4       ← reportado, no tocado
+→ Usa --aggressive para borrar el comprimido si todos sus archivos son duplicados.
+```
+
+**Con `--aggressive`** — evalúa cada comprimido:
+```
+✓ comprimido completo: /backups/archivo.zip   ← todos sus archivos eran duplicados
+⊡ /backups/otro.zip — tiene archivos únicos, no se borra (1 duplicado(s) dentro)
+
+### Borrar si el canónico es un archivo suelto en disco y todos sus duplicados están dentro de comprimidos:
+
+```
+media-index dupes --delete --prefer-archive
+```
+
+### Combinado con --aggressive (borra sueltos + comprimidos completos duplicados):
+
+```
+media-index dupes --delete --prefer-archive --aggressive
+```
