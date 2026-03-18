@@ -3,12 +3,14 @@ mod db;
 mod models;
 mod parsers;
 mod scanner;
+mod thumbs;
 
 use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use humansize::{format_size, DECIMAL};
+use indicatif::{ProgressBar, ProgressStyle};
 
 use db::Database;
 use scanner::Scanner;
@@ -86,6 +88,22 @@ enum Commands {
     /// Verificar dependencias opcionales
     Doctor,
 
+    /// Generar thumbnails de imágenes, videos y modelos 3D
+    Thumbs {
+        /// Filtrar por tipo (por defecto genera los tres tipos)
+        #[arg(short, long)]
+        tipo: Option<MediaTypeArg>,
+        /// Tamaño en píxeles del lado del cuadrado
+        #[arg(short, long, default_value = "256")]
+        size: u32,
+        /// Calidad JPEG (1-100)
+        #[arg(short, long, default_value = "85")]
+        quality: u8,
+        /// Regenerar thumbnails que ya existen
+        #[arg(short, long)]
+        force: bool,
+    },
+
     /// Borrar toda la base de datos (pide confirmación)
     Clear {
         /// No pedir confirmación (útil en scripts)
@@ -129,6 +147,7 @@ fn main() -> Result<()> {
         Commands::Search { query, tipo } => cmd_search(db, &query, tipo),
         Commands::Export { output }      => cmd_export(db, &output),
         Commands::Doctor                  => cmd_doctor(),
+        Commands::Thumbs { tipo, size, quality, force } => cmd_thumbs(db, &cli.db, tipo, size, quality, force),
         Commands::Clear { .. }           => unreachable!(),
     }
 }
@@ -273,7 +292,7 @@ fn cmd_stats(db: Database) -> Result<()> {
             count.to_string().cyan(),
             format_size(*bytes as u64, DECIMAL).dimmed(),
             icon,
-            type_str.to_uppercase().bold(),
+            type_str.as_str().to_uppercase().bold(),
         );
     }
 
@@ -561,7 +580,8 @@ fn cmd_search(db: Database, query: &str, tipo: Option<MediaTypeArg>) -> Result<(
             "▸".cyan(), badge, r.name.bold());
         println!("  {}", r.path.dimmed());
 
-        let info: Vec<String> = match &r.detail {
+        let detail = &r.detail;
+        let info: Vec<String> = match detail {
             SearchDetail::Audio { duration, artist, title, album } => {
                 let mut v = vec![format_size(r.size_bytes, DECIMAL)];
                 if let Some(d) = duration { v.push(fmt_duration(*d)); }
@@ -646,6 +666,99 @@ fn cmd_doctor() -> Result<()> {
     );
 
     println!("\n  {} ZIP, 7Z, audio, imagen: pure Rust — sin dependencias", "✓".green());
+    Ok(())
+}
+
+fn cmd_thumbs(
+    db:      Database,
+    db_path: &str,
+    tipo:    Option<MediaTypeArg>,
+    size:    u32,
+    quality: u8,
+    force:   bool,
+) -> Result<()> {
+    use thumbs::{thumb_dir_for_db, thumb_path, generate_image, generate_video, generate_3d};
+
+    let thumb_dir   = thumb_dir_for_db(db_path);
+    let type_filter = tipo.as_ref().map(|t| t.as_db_str());
+    let files       = db.files_for_thumbs(type_filter)?;
+
+    if files.is_empty() {
+        println!("{}", "No hay archivos candidatos para thumbnails.".dimmed());
+        return Ok(());
+    }
+
+    println!("{} Generando thumbnails en {}",
+        "🖼", thumb_dir.display().to_string().bold());
+    println!("  {} archivos  {}px  calidad {}\n",
+        files.len().to_string().cyan(), size, quality);
+
+    let pb = ProgressBar::new(files.len() as u64);
+    pb.set_style(ProgressStyle::with_template(
+        "{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}"
+    )?.progress_chars("█▓░"));
+
+    let (mut ok, mut skipped, mut errors) = (0usize, 0usize, 0usize);
+
+    for (hash, path, media_type, ext) in &files {
+        let media_type: &str = media_type.as_str();
+        let hash:       &str = hash.as_str();
+        let path:       &str = path.as_str();
+        let ext:        &str = ext.as_str();
+        pb.set_message(
+            std::path::Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().chars().take(45).collect::<String>())
+                .unwrap_or_default()
+        );
+
+        // Saltar si ya existe y no se pidió --force
+        let t_path = thumb_path(&thumb_dir, hash);
+        if t_path.exists() && !force {
+            skipped += 1;
+            pb.inc(1);
+            continue;
+        }
+
+        let result = match media_type {
+            "image" => generate_image(path, hash, &thumb_dir, size, quality),
+            "video" => generate_video(path, hash, &thumb_dir, size, quality),
+            "3d"    => {
+                match std::fs::read(path) {
+                    Ok(data) => generate_3d(&data, ext, hash, &thumb_dir, size, quality),
+                    Err(e)   => Err(anyhow::anyhow!(e)),
+                }
+            }
+            _ => { pb.inc(1); continue; }
+        };
+
+        match result {
+            Ok(_)  => ok += 1,
+            Err(e) => {
+                errors += 1;
+                pb.println(format!("  {} {}: {e}", "✗".red(),
+                    std::path::Path::new(path).file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default()));
+            }
+        }
+
+        pb.inc(1);
+    }
+
+    pb.finish_with_message("listo");
+
+    println!("\n{}", "─── Resultado ────────────────────────────────".dimmed());
+    println!("  {} generados",  ok.to_string().green().bold());
+    if skipped > 0 {
+        println!("  {} omitidos (ya existían — usa {} para regenerar)",
+            skipped.to_string().dimmed(), "--force".bold());
+    }
+    if errors > 0 {
+        println!("  {} errores", errors.to_string().red());
+    }
+    println!("  → {}", thumb_dir.display().to_string().dimmed());
+
     Ok(())
 }
 

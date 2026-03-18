@@ -14,7 +14,7 @@ Indexador y deduplicador de archivos multimedia escrito en Rust. Escanea directo
 - **Watch mode** — vigila un directorio en tiempo real e indexa cambios al instante
 - **Borrado inteligente de duplicados** con tres modos de operación
 - **Paralelismo** con rayon para escaneos rápidos en colecciones grandes
-
+- **Thumbnails** Generar thumbnails de imágenes + video + 3D
 ---
 
 ## Instalación
@@ -63,6 +63,21 @@ media-index search "vacation"
 
 # Vigilar cambios en tiempo real
 media-index watch ./mis-fotos
+
+# Generar thumbnails de todo (imágenes + video + 3D)
+media-index thumbs
+
+# Solo imágenes, tamaño personalizado
+media-index thumbs --tipo imagen --size 512
+
+# Regenerar todo desde cero
+media-index thumbs --force
+
+# Calidad baja para ahorrar espacio
+media-index thumbs --quality 60
+
+# BD personalizada
+media-index -d coleccion.db thumbs
 ```
 
 ---
