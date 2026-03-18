@@ -4,13 +4,11 @@ use anyhow::Result;
 pub const DEFAULT_SIZE:    u32 = 256;
 pub const DEFAULT_QUALITY: u8  = 85;
 
-// Paleta para thumbnails 3D
-const DARK_BG:     [u8; 3] = [28,  28,  32 ];
-const POINT_COLOR: [u8; 3] = [200, 220, 255];
-const EDGE_COLOR:  [u8; 3] = [100, 140, 200];
+// Fondo oscuro
+const DARK_BG: [u8; 3] = [28, 28, 32];
 
-// Cap de vértices/triángulos para no bloquear con modelos enormes
-const MAX_VERTS: usize = 60_000;
+// Cap para no bloquear con modelos enormes
+const MAX_VERTS: usize = 150_000;
 
 // ── Rutas ─────────────────────────────────────────────────────────────────
 
@@ -44,6 +42,7 @@ pub fn generate_image_from_bytes(
     quality:   u8,
 ) -> Result<()> {
     let img   = image::load_from_memory(data)?;
+    let img   = apply_exif_orientation(img, data);
     let thumb = img.thumbnail(size, size);
     write_jpeg(&thumb.to_rgb8(), hash, thumb_dir, quality)
 }
@@ -56,10 +55,45 @@ pub fn generate_image(
     size:      u32,
     quality:   u8,
 ) -> Result<()> {
-    let data = std::fs::read(path)?;
-    let img  = image::load_from_memory(&data)?;
+    let data  = std::fs::read(path)?;
+    let img   = image::load_from_memory(&data)?;
+    let img   = apply_exif_orientation(img, &data);
     let thumb = img.thumbnail(size, size);
     write_jpeg(&thumb.to_rgb8(), hash, thumb_dir, quality)
+}
+
+/// Corrige la orientación de la imagen según el tag EXIF Orientation.
+/// Las cámaras y móviles almacenan las fotos rotadas con la corrección en EXIF.
+fn apply_exif_orientation(img: image::DynamicImage, data: &[u8]) -> image::DynamicImage {
+    use exif::{Reader as ExifReader, Tag, In, Value};
+
+    let orientation = ExifReader::new()
+        .read_from_container(&mut std::io::Cursor::new(data))
+        .ok()
+        .and_then(|exif| {
+            exif.get_field(Tag::Orientation, In::PRIMARY)
+                .and_then(|f| match &f.value {
+                    Value::Short(v) => v.first().copied(),
+                    _ => None,
+                })
+        })
+        .unwrap_or(1);
+
+    // Valores EXIF Orientation:
+    // 1 = Normal          2 = Flip H
+    // 3 = Rotate 180°     4 = Flip V
+    // 5 = Transpose       6 = Rotate 90° CW
+    // 7 = Transverse      8 = Rotate 270° CW
+    match orientation {
+        2 => img.fliph(),
+        3 => img.rotate180(),
+        4 => img.flipv(),
+        5 => img.rotate90().fliph(),
+        6 => img.rotate90(),
+        7 => img.rotate270().fliph(),
+        8 => img.rotate270(),
+        _ => img, // 1 o desconocido: sin cambios
+    }
 }
 
 /// Thumbnail de video usando ffmpeg: extrae un frame cerca del inicio.
@@ -147,17 +181,36 @@ pub fn generate_3d(
 
 // ── Renderizador isométrico ───────────────────────────────────────────────
 
+// Color base del modelo y luz
+const MODEL_COLOR: [f32; 3] = [0.60, 0.78, 0.95]; // azul claro
+const LIGHT_DIR:   [f32; 3] = [0.57, 0.57, 0.57];  // luz diagonal ~(1,1,1) normalizada
+const AMBIENT:     f32      = 0.35;                  // ambiente más alto = menos zonas negras
+
 fn render_isometric(
     verts: &[[f32; 3]],
     tris:  &[[usize; 3]],
     size:  u32,
 ) -> image::RgbImage {
-    // 1. Normalizar a [-0.9, 0.9] respetando proporciones
-    let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
-    for v in verts {
-        for i in 0..3 { lo[i] = lo[i].min(v[i]); hi[i] = hi[i].max(v[i]); }
-    }
-    let range = (0..3).map(|i| (hi[i] - lo[i]).max(1e-6)).fold(f32::MIN, f32::max);
+    // Renderizar a 2x y reducir (supersampling 4x) para eliminar gaps sub-pixel
+    let render_size = size * 2;
+
+    // 1. Normalizar por percentil (P1–P99) para ignorar vértices outlier.
+    // Min/max absoluto hace que un solo vértice lejano encoja todo el modelo.
+    let mut xs: Vec<f32> = verts.iter().map(|v| v[0]).collect();
+    let mut ys: Vec<f32> = verts.iter().map(|v| v[1]).collect();
+    let mut zs: Vec<f32> = verts.iter().map(|v| v[2]).collect();
+    xs.sort_unstable_by(|a,b| a.partial_cmp(b).unwrap());
+    ys.sort_unstable_by(|a,b| a.partial_cmp(b).unwrap());
+    zs.sort_unstable_by(|a,b| a.partial_cmp(b).unwrap());
+
+    let p = |v: &[f32], pct: f32| -> f32 {
+        let i = ((v.len() as f32 * pct).round() as usize).min(v.len()-1);
+        v[i]
+    };
+    let lo = [p(&xs,0.01), p(&ys,0.01), p(&zs,0.01)];
+    let hi = [p(&xs,0.99), p(&ys,0.99), p(&zs,0.99)];
+
+    let range  = (0..3).map(|i| (hi[i] - lo[i]).max(1e-6)).fold(f32::MIN, f32::max);
     let center = [(lo[0]+hi[0])/2.0, (lo[1]+hi[1])/2.0, (lo[2]+hi[2])/2.0];
     let norm: Vec<[f32; 3]> = verts.iter().map(|v| [
         (v[0] - center[0]) / range * 1.8,
@@ -165,71 +218,124 @@ fn render_isometric(
         (v[2] - center[2]) / range * 1.8,
     ]).collect();
 
-    // 2. Proyección isométrica (azimut 45°, elevación 30°)
+    // 2. Proyección isométrica (azimut 45°, elevación 35°)
     let az = 45_f32.to_radians();
-    let el = 30_f32.to_radians();
-    let proj: Vec<[f32; 2]> = norm.iter().map(|v| {
-        let x =  v[0] * az.cos() - v[2] * az.sin();
-        let y = -v[0] * az.sin() * el.sin()
-                - v[1] * el.cos()
-                - v[2] * az.cos() * el.sin();
-        [x, y]
+    let el = 35_f32.to_radians();
+
+    let proj3d: Vec<[f32; 3]> = norm.iter().map(|v| {
+        let rx =  v[0] * az.cos() - v[2] * az.sin();
+        let ry =  v[1];
+        let rz =  v[0] * az.sin() + v[2] * az.cos();
+        let fx =  rx;
+        let fy =  ry * el.cos() - rz * el.sin();
+        let fz =  ry * el.sin() + rz * el.cos();
+        [fx, fy, fz]
     }).collect();
 
-    // 3. Mapear a píxeles
-    let half  = size as f32 / 2.0;
-    let scale = half * 0.85;
-    let to_px = |p: [f32; 2]| -> (i32, i32) {
+    // 3. Proyección 2D al buffer de alta resolución
+    let half  = render_size as f32 / 2.0;
+    let scale = half * 0.88;
+    let to_px = |p: &[f32; 3]| -> (i32, i32) {
         ((half + p[0] * scale).round() as i32,
-         (half + p[1] * scale).round() as i32)
+         (half - p[1] * scale).round() as i32)
     };
 
-    let mut img = image::RgbImage::from_pixel(size, size, image::Rgb(DARK_BG));
+    // 4. Calcular triángulos
+    struct TriData { px: [(i32,i32); 3], depth: f32, color: [u8; 3] }
+    let mut tri_data: Vec<TriData> = Vec::with_capacity(tris.len());
 
-    // 4. Aristas de triángulos
     for tri in tris {
-        for &(a, b) in &[(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
-            if a < proj.len() && b < proj.len() {
-                let (x0, y0) = to_px(proj[a]);
-                let (x1, y1) = to_px(proj[b]);
-                draw_line(&mut img, x0, y0, x1, y1, EDGE_COLOR);
-            }
-        }
+        let (a, b, c) = (tri[0], tri[1], tri[2]);
+        if a >= proj3d.len() || b >= proj3d.len() || c >= proj3d.len() { continue; }
+        let va = proj3d[a]; let vb = proj3d[b]; let vc = proj3d[c];
+
+        let ab = [vb[0]-va[0], vb[1]-va[1], vb[2]-va[2]];
+        let ac = [vc[0]-va[0], vc[1]-va[1], vc[2]-va[2]];
+        let nx = ab[1]*ac[2] - ab[2]*ac[1];
+        let ny = ab[2]*ac[0] - ab[0]*ac[2];
+        let nz = ab[0]*ac[1] - ab[1]*ac[0];
+        let nlen = (nx*nx + ny*ny + nz*nz).sqrt().max(1e-8);
+        let (nx, ny, nz) = (nx/nlen, ny/nlen, nz/nlen);
+
+        let diffuse = (nx*LIGHT_DIR[0] + ny*LIGHT_DIR[1] + nz*LIGHT_DIR[2]).abs();
+        let light   = (AMBIENT + (1.0 - AMBIENT) * diffuse).min(1.0);
+        let color   = [
+            (MODEL_COLOR[0] * light * 255.0) as u8,
+            (MODEL_COLOR[1] * light * 255.0) as u8,
+            (MODEL_COLOR[2] * light * 255.0) as u8,
+        ];
+        let depth = (va[2] + vb[2] + vc[2]) / 3.0;
+        tri_data.push(TriData { px: [to_px(&va), to_px(&vb), to_px(&vc)], depth, color });
     }
 
-    // 5. Puntos (siempre, encima de aristas)
-    for p in &proj {
-        let (cx, cy) = to_px(*p);
-        draw_dot(&mut img, cx, cy, POINT_COLOR);
+    // 5. Z-buffer en resolución 2x
+    let sz = (render_size * render_size) as usize;
+    let mut zbuf   = vec![f32::NEG_INFINITY; sz];
+    let mut pixels: Vec<[u8; 3]> = vec![DARK_BG; sz];
+
+    for tri in &tri_data {
+        fill_triangle_zbuf(&mut zbuf, &mut pixels, render_size,
+            tri.px[0], tri.px[1], tri.px[2], tri.depth, tri.color);
+    }
+
+    // 6. Downsample 2x→1x promediando bloques 2×2 (anti-aliasing)
+    let mut img = image::RgbImage::new(size, size);
+    for y in 0..size {
+        for x in 0..size {
+            let mut r = 0u32; let mut g = 0u32; let mut b = 0u32;
+            for dy in 0..2u32 { for dx in 0..2u32 {
+                let idx = ((y*2+dy) * render_size + (x*2+dx)) as usize;
+                r += pixels[idx][0] as u32;
+                g += pixels[idx][1] as u32;
+                b += pixels[idx][2] as u32;
+            }}
+            img.put_pixel(x, y, image::Rgb([(r/4) as u8, (g/4) as u8, (b/4) as u8]));
+        }
     }
 
     img
 }
 
-fn draw_line(img: &mut image::RgbImage, x0: i32, y0: i32, x1: i32, y1: i32, color: [u8; 3]) {
-    let (w, h) = (img.width() as i32, img.height() as i32);
-    let (dx, dy) = ((x1-x0).abs(), (y1-y0).abs());
-    let (sx, sy) = (if x0 < x1 { 1 } else { -1 }, if y0 < y1 { 1 } else { -1 });
-    let (mut x, mut y, mut err) = (x0, y0, dx - dy);
-    loop {
-        if x >= 0 && x < w && y >= 0 && y < h {
-            img.put_pixel(x as u32, y as u32, image::Rgb(color));
-        }
-        if x == x1 && y == y1 { break; }
-        let e2 = 2 * err;
-        if e2 > -dy { err -= dy; x += sx; }
-        if e2 <  dx { err += dx; y += sy; }
-    }
-}
+/// Rellena un triángulo con z-buffer: solo pinta un píxel si está más cerca
+/// que lo que ya había. Interpola la profundidad linealmente.
+fn fill_triangle_zbuf(
+    zbuf:   &mut Vec<f32>,
+    pixels: &mut Vec<[u8; 3]>,
+    size:   u32,
+    p0: (i32, i32), p1: (i32, i32), p2: (i32, i32),
+    depth: f32,
+    color: [u8; 3],
+) {
+    let w = size as i32;
+    let h = size as i32;
 
-fn draw_dot(img: &mut image::RgbImage, cx: i32, cy: i32, color: [u8; 3]) {
-    let (w, h) = (img.width() as i32, img.height() as i32);
-    for dy in -1i32..=1 { for dx in -1i32..=1 {
-        let (x, y) = (cx + dx, cy + dy);
-        if x >= 0 && x < w && y >= 0 && y < h {
-            img.put_pixel(x as u32, y as u32, image::Rgb(color));
+    // Ordenar vértices por Y ascendente
+    let mut pts = [(p0.0, p0.1), (p1.0, p1.1), (p2.0, p2.1)];
+    pts.sort_unstable_by_key(|p| p.1);
+    let [(x0,y0), (x1,y1), (x2,y2)] = pts;
+
+    let interp = |ya: i32, yb: i32, xa: i32, xb: i32, y: i32| -> i32 {
+        if ya == yb { xa.min(xb) }
+        else { xa + (xb - xa) * (y - ya) / (yb - ya) }
+    };
+
+    for y in y0.max(0)..=y2.min(h - 1) {
+        let lx = if y < y1 {
+            interp(y0, y1, x0, x1, y)
+        } else {
+            interp(y1, y2, x1, x2, y)
+        };
+        let rx = interp(y0, y2, x0, x2, y);
+        let (lx, rx) = (lx.min(rx).max(0), lx.max(rx).min(w - 1));
+
+        for x in lx..=rx {
+            let idx = y as usize * size as usize + x as usize;
+            if depth > zbuf[idx] {
+                zbuf[idx]   = depth;
+                pixels[idx] = color;
+            }
         }
-    }}
+    }
 }
 
 // ── Parsers de geometría 3D ───────────────────────────────────────────────
