@@ -344,23 +344,21 @@ impl Database {
         Ok(canonical_count == 0 && dup_count > 0)
     }
 
-    /// Devuelve todos los archivos candidatos a thumbnail.
-    /// Excluye archivos dentro de comprimidos (contienen "::") porque no se
-    /// pueden leer directamente desde disco.
+    /// Devuelve todos los archivos candidatos a thumbnail (imágenes, videos y 3D),
+    /// incluyendo los que están dentro de comprimidos.
     pub fn files_for_thumbs(
         &self,
         media_type: Option<&str>,
     ) -> Result<Vec<(String, String, String, String)>> {
         let type_filter = match media_type {
-            Some(t) => format!("AND media_type = '{t}'"),
-            None    => "AND media_type IN ('image', 'video', '3d')".to_string(),
+            Some(t) => format!("media_type = '{t}'"),
+            None    => "media_type IN ('image', 'video', '3d')".to_string(),
         };
 
         let sql = format!(
             "SELECT blake3_hash, current_path, media_type, extension
              FROM files
-             WHERE current_path NOT LIKE '%::%'
-             {type_filter}
+             WHERE {type_filter}
              ORDER BY media_type, size_bytes DESC"
         );
 

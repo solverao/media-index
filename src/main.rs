@@ -677,7 +677,8 @@ fn cmd_thumbs(
     quality: u8,
     force:   bool,
 ) -> Result<()> {
-    use thumbs::{thumb_dir_for_db, thumb_path, generate_image, generate_video, generate_3d};
+    use thumbs::{thumb_dir_for_db, thumb_path, generate_image, generate_image_from_bytes,
+                 generate_video, generate_video_from_archive, generate_3d};
 
     let thumb_dir   = thumb_dir_for_db(db_path);
     let type_filter = tipo.as_ref().map(|t| t.as_db_str());
@@ -720,16 +721,37 @@ fn cmd_thumbs(
             continue;
         }
 
-        let result = match media_type {
-            "image" => generate_image(path, hash, &thumb_dir, size, quality),
-            "video" => generate_video(path, hash, &thumb_dir, size, quality),
-            "3d"    => {
-                match std::fs::read(path) {
-                    Ok(data) => generate_3d(&data, ext, hash, &thumb_dir, size, quality),
-                    Err(e)   => Err(anyhow::anyhow!(e)),
+        let result = if path.contains("::") {
+            // ── Archivo dentro de comprimido ──────────────────────────────
+            let mut parts = path.splitn(2, "::");
+            let archive_path = parts.next().unwrap_or("");
+            let inner_name   = parts.next().unwrap_or("");
+
+            // Extraer los bytes del archivo del comprimido
+            let bytes_result = extract_entry_bytes(archive_path, inner_name);
+
+            match bytes_result {
+                Err(e) => Err(e),
+                Ok(data) => match media_type {
+                    "image" => generate_image_from_bytes(&data, hash, &thumb_dir, size, quality),
+                    "video" => generate_video_from_archive(&data, ext, hash, &thumb_dir, size, quality),
+                    "3d"    => generate_3d(&data, ext, hash, &thumb_dir, size, quality),
+                    _       => { pb.inc(1); continue; }
                 }
             }
-            _ => { pb.inc(1); continue; }
+        } else {
+            // ── Archivo suelto en disco ───────────────────────────────────
+            match media_type {
+                "image" => generate_image(path, hash, &thumb_dir, size, quality),
+                "video" => generate_video(path, hash, &thumb_dir, size, quality),
+                "3d"    => {
+                    match std::fs::read(path) {
+                        Ok(data) => generate_3d(&data, ext, hash, &thumb_dir, size, quality),
+                        Err(e)   => Err(anyhow::anyhow!(e)),
+                    }
+                }
+                _ => { pb.inc(1); continue; }
+            }
         };
 
         match result {
@@ -760,6 +782,98 @@ fn cmd_thumbs(
     println!("  → {}", thumb_dir.display().to_string().dimmed());
 
     Ok(())
+}
+
+/// Extrae los bytes de un archivo específico dentro de un comprimido.
+/// Soporta .zip, .7z y .rar (igual que archive.rs).
+fn extract_entry_bytes(archive_path: &str, inner_name: &str) -> anyhow::Result<Vec<u8>> {
+    use crate::models::ArchiveType;
+    use std::path::Path;
+
+    let arc_path = Path::new(archive_path);
+    let arc_type = ArchiveType::from_path(arc_path)
+        .ok_or_else(|| anyhow::anyhow!("Formato de comprimido no soportado: {archive_path}"))?;
+
+    match arc_type {
+        ArchiveType::Zip => {
+            let file    = std::fs::File::open(arc_path)?;
+            let mut zip = zip::ZipArchive::new(file)?;
+
+            // Primero buscar por nombre exacto; si no, buscar por nombre de archivo base
+            let idx = if zip.by_name(inner_name).is_ok() {
+                // by_name con is_ok no retiene el borrow — buscar el índice real
+                (0..zip.len()).find(|&i| {
+                    zip.by_index(i).ok()
+                        .map(|e| e.name() == inner_name)
+                        .unwrap_or(false)
+                })
+            } else {
+                let base = std::path::Path::new(inner_name)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                (0..zip.len()).find(|&i| {
+                    zip.by_index(i).ok()
+                        .map(|e| e.name().ends_with(&*base))
+                        .unwrap_or(false)
+                })
+            }.ok_or_else(|| anyhow::anyhow!("{inner_name} no encontrado en {archive_path}"))?;
+
+            let mut entry = zip.by_index(idx)?;
+            let mut data  = Vec::with_capacity(entry.size() as usize);
+            std::io::copy(&mut entry, &mut data)?;
+            Ok(data)
+        }
+        ArchiveType::SevenZip => {
+            use sevenz_rust::SevenZReader;
+            let mut archive = SevenZReader::open(arc_path, sevenz_rust::Password::empty())?;
+            let mut found   = None;
+            archive.for_each_entries(|entry, reader| {
+                if entry.name() == inner_name
+                    || entry.name().ends_with(&format!("/{inner_name}"))
+                    || entry.name().ends_with(&format!("\\{inner_name}"))
+                {
+                    let mut data = Vec::new();
+                    let _ = std::io::copy(reader, &mut data);
+                    found = Some(data);
+                    return Ok(false); // detener iteración
+                }
+                Ok(true)
+            })?;
+            found.ok_or_else(|| anyhow::anyhow!("{inner_name} no encontrado en {archive_path}"))
+        }
+        ArchiveType::Rar => {
+            // Para RAR extraemos todo a temp y leemos el archivo buscado
+            use std::process::Command;
+            let tmp = std::env::temp_dir()
+                .join(format!("media_idx_rar_{}", std::path::Path::new(archive_path)
+                    .file_stem().map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "tmp".into())));
+            std::fs::create_dir_all(&tmp)?;
+            Command::new("unrar")
+                .args(["x", "-y", "-inul", archive_path])
+                .arg(&tmp)
+                .status()?;
+            // Buscar el archivo en el directorio temporal
+            let target = walkdir::WalkDir::new(&tmp)
+                .into_iter()
+                .flatten()
+                .find(|e| e.file_type().is_file() && {
+                    let name = e.file_name().to_string_lossy();
+                    let inner_base = Path::new(inner_name)
+                        .file_name().map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    name == inner_base.as_str()
+                })
+                .map(|e| e.path().to_path_buf());
+            let result = match &target {
+                Some(p) => std::fs::read(p).map_err(|e| anyhow::anyhow!(e)),
+                None    => Err(anyhow::anyhow!("{inner_name} no encontrado en {archive_path}")),
+            };
+            let _ = std::fs::remove_dir_all(&tmp);
+            result
+        }
+    }
 }
 
 fn cmd_clear(db_path: &str, force: bool) -> Result<()> {

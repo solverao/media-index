@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 use anyhow::Result;
 
+pub const DEFAULT_SIZE:    u32 = 256;
+pub const DEFAULT_QUALITY: u8  = 85;
+
 // Paleta para thumbnails 3D
 const DARK_BG:     [u8; 3] = [28,  28,  32 ];
 const POINT_COLOR: [u8; 3] = [200, 220, 255];
@@ -31,6 +34,19 @@ pub fn thumb_dir_for_db(db_path: &str) -> PathBuf {
 }
 
 // ── Generadores públicos ──────────────────────────────────────────────────
+
+/// Thumbnail de imagen desde bytes en memoria (para archivos dentro de comprimidos).
+pub fn generate_image_from_bytes(
+    data:      &[u8],
+    hash:      &str,
+    thumb_dir: &Path,
+    size:      u32,
+    quality:   u8,
+) -> Result<()> {
+    let img   = image::load_from_memory(data)?;
+    let thumb = img.thumbnail(size, size);
+    write_jpeg(&thumb.to_rgb8(), hash, thumb_dir, quality)
+}
 
 /// Thumbnail de imagen desde su ruta en disco.
 pub fn generate_image(
@@ -86,6 +102,29 @@ pub fn generate_video(
     // Limpiar archivo parcial si quedó
     let _ = std::fs::remove_file(&out);
     anyhow::bail!("ffmpeg no generó thumbnail para {path}")
+}
+
+/// Thumbnail de video desde bytes en memoria (archivo dentro de comprimido).
+/// Escribe los bytes a un archivo temporal, llama a ffmpeg y lo borra.
+pub fn generate_video_from_archive(
+    data:      &[u8],
+    ext:       &str,
+    hash:      &str,
+    thumb_dir: &Path,
+    size:      u32,
+    quality:   u8,
+) -> Result<()> {
+    let tmp_path = std::env::temp_dir()
+        .join(format!("media_idx_thumb_{hash}.{ext}"));
+    std::fs::write(&tmp_path, data)?;
+
+    let result = generate_video(
+        tmp_path.to_string_lossy().as_ref(),
+        hash, thumb_dir, size, quality,
+    );
+
+    let _ = std::fs::remove_file(&tmp_path);
+    result
 }
 
 /// Thumbnail de modelo 3D: proyección isométrica de la malla.
