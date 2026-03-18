@@ -39,6 +39,16 @@ enum Commands {
         verbose: bool,
     },
 
+    /// Vigilar un directorio e indexar cambios en tiempo real
+    Watch {
+        path: PathBuf,
+        #[arg(short, long)]
+        verbose: bool,
+        /// Segundos de espera antes de procesar un evento (default: 2)
+        #[arg(short, long, default_value = "2")]
+        debounce: u64,
+    },
+
     /// Estadísticas generales de la colección
     Stats,
 
@@ -112,7 +122,8 @@ fn main() -> Result<()> {
     let db = Database::open(&cli.db)?;
 
     match cli.command {
-        Commands::Scan { path, verbose } => cmd_scan(db, &path, verbose),
+        Commands::Scan { path, verbose }  => cmd_scan(db, &path, verbose),
+        Commands::Watch { path, verbose, debounce } => cmd_watch(db, &path, verbose, debounce),
         Commands::Stats                   => cmd_stats(db),
         Commands::Dupes { tipo, json, delete, aggressive, prefer_archive } => cmd_dupes(db, tipo, json, delete, aggressive, prefer_archive),
         Commands::Search { query, tipo } => cmd_search(db, &query, tipo),
@@ -155,6 +166,91 @@ fn cmd_scan(db: Database, path: &std::path::Path, verbose: bool) -> Result<()> {
     println!("  {}", "──────────────────────────────────────".dimmed());
     println!("  {} indexados en total", s.total_indexed().to_string().cyan().bold());
  
+    Ok(())
+}
+
+fn cmd_watch(db: Database, path: &std::path::Path, verbose: bool, debounce_secs: u64) -> Result<()> {
+    use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode, DebouncedEventKind};
+    use std::time::Duration;
+
+    if !path.exists() {
+        anyhow::bail!("El directorio no existe: {}", path.display());
+    }
+
+    if !ffprobe_available() {
+        println!("{} ffprobe no encontrado — metadatos de video no disponibles", "⚠".yellow());
+        println!("  Instalar: sudo apt install ffmpeg  /  brew install ffmpeg\n");
+    }
+
+    // Escaneo inicial completo
+    println!("{}", format!("Escaneo inicial: {}", path.display()).bold().cyan());
+    let scanner = Scanner::new(db, verbose);
+    let s = scanner.scan(path)?;
+    println!("  {} indexados  {} duplicados\n",
+        s.total_indexed().to_string().cyan().bold(),
+        s.duplicates.to_string().red());
+
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    let mut debouncer = new_debouncer(
+        Duration::from_secs(debounce_secs),
+        move |res| { let _ = tx.send(res); },
+    )?;
+
+    debouncer.watcher().watch(path, RecursiveMode::Recursive)?;
+
+    println!("{} Vigilando {}  {}",
+        "👁",
+        path.display().to_string().bold(),
+        format!("(debounce {}s — Ctrl+C para salir)", debounce_secs).dimmed());
+
+    for events in rx {
+        let events = match events {
+            Ok(e)  => e,
+            Err(e) => { eprintln!("{} Error de watcher: {e:?}", "✗".red()); continue; }
+        };
+
+        // Deduplicar paths en este batch
+        let mut to_index:  std::collections::HashSet<PathBuf> = Default::default();
+        let mut had_remove = false;
+
+        for event in events {
+            match event.kind {
+                DebouncedEventKind::Any => {
+                    let p = &event.path;
+                    if p.is_file() {
+                        to_index.insert(p.clone());
+                    } else if !p.exists() {
+                        had_remove = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Borrados → cleanup en BD
+        if had_remove {
+            match scanner.cleanup() {
+                Ok((f, d)) if f > 0 || d > 0 =>
+                    println!("  {} {} entrada(s) eliminadas de la BD", "🧹", f + d),
+                _ => {}
+            }
+        }
+
+        // Nuevos / modificados → indexar
+        for file_path in &to_index {
+            let ext = file_path.extension()
+                .map(|e| e.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+            let name = file_path.file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+
+            println!("  {} {}", "→".cyan(), name.bold());
+            scanner.index_single(file_path, &ext);
+        }
+    }
+
     Ok(())
 }
 

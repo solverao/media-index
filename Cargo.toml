@@ -45,6 +45,10 @@ quick-xml = "0.36"
 colored   = "2"
 humansize = "2"
 
+# Watcher de filesystem
+notify         = "6"
+notify-debouncer-mini = "0.4"
+
 # ── Media ────────────────────────────────────────────────────
 # Audio: tags + duración (MP3, FLAC, OGG, M4A, WAV, AIFF…)
 lofty = "0.22"

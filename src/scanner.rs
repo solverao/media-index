@@ -243,6 +243,78 @@ impl Scanner {
             }
         }
     }
+
+    // ── API pública para watch mode ───────────────────────────────────────
+
+    /// Limpia entradas obsoletas de la BD (delega en db::cleanup_stale).
+    pub fn cleanup(&self) -> Result<(usize, usize)> {
+        self.db.lock().unwrap().cleanup_stale()
+    }
+
+    /// Indexa un único archivo (nuevo o modificado).
+    /// Usado por el watcher para procesar eventos individuales sin re-escanear todo.
+    pub fn index_single(&self, path: &Path, ext: &str) {
+        // Archivos comprimidos: extraer y procesar su contenido
+        if let Some(archive_type) = ArchiveType::from_path(path) {
+            let name_lower = path.file_name()
+                .map(|n| n.to_string_lossy().to_lowercase())
+                .unwrap_or_default();
+
+            // Ignorar partes extra de multi-part
+            if archive_type == ArchiveType::Rar && is_rar_multipart(&name_lower) {
+                if !name_lower.contains(".part1.") && !name_lower.contains(".part01.") { return; }
+            }
+            if archive_type == ArchiveType::SevenZip && is_7z_multipart(&name_lower) {
+                if !name_lower.ends_with(".001") { return; }
+            }
+
+            match extract_media_files(path, &archive_type) {
+                Ok(files) => {
+                    let built: Vec<MediaEntry> = files.into_iter()
+                        .map(|extracted| {
+                            let mt = MediaType::from_extension(&extracted.ext)
+                                .unwrap_or(MediaType::Other);
+                            build_entry_from_memory(
+                                &extracted.data, &extracted.name,
+                                &extracted.ext, &mt,
+                                path.to_string_lossy().as_ref(),
+                            )
+                        })
+                        .collect();
+
+                    let mut dummy = ScanStats::default();
+                    for entry in built {
+                        self.insert_entry(entry, &mut dummy);
+                    }
+                }
+                Err(e) if self.verbose => {
+                    eprintln!("  {} {}: {e}", "✗".red(), path.display());
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Archivo normal: construir entry e insertar
+        let media_type = MediaType::from_extension(ext).unwrap_or(MediaType::Other);
+        match self.build_entry(path, ext, &media_type) {
+            Ok(entry) => {
+                let mut s = ScanStats::default();
+                self.insert_entry(entry, &mut s);
+                if self.verbose {
+                    let label = match s.duplicates {
+                        0 => "indexado".green(),
+                        _ => "duplicado".red(),
+                    };
+                    println!("    {} {}", label, path.display());
+                }
+            }
+            Err(e) if self.verbose => {
+                eprintln!("  {} {}: {e}", "✗".red(), path.display());
+            }
+            _ => {}
+        }
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
