@@ -12,5 +12,6 @@ pub fn parse(data: &[u8], ext: &str, media_type: &MediaType, path: &str) -> Meta
         MediaType::Audio   => Metadata::Audio(audio::parse(data, ext)),
         MediaType::Video   => Metadata::Video(video::parse_from_path(path)),
         MediaType::Image   => Metadata::Image(image::parse(data)),
+        MediaType::Other   => Metadata::None,
     }
 }

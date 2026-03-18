@@ -8,6 +8,7 @@ pub enum MediaType {
     Video,
     Audio,
     Image,
+    Other,
 }
 
 impl MediaType {
@@ -17,6 +18,7 @@ impl MediaType {
             Self::Video   => "video",
             Self::Audio   => "audio",
             Self::Image   => "image",
+            Self::Other   => "other",
         }
     }
 
@@ -26,7 +28,7 @@ impl MediaType {
             "video" => Self::Video,
             "audio" => Self::Audio,
             "image" => Self::Image,
-            _       => Self::Image, // fallback
+            _       => Self::Other,
         }
     }
 
@@ -186,6 +188,7 @@ pub struct ScanStats {
     pub indexed_video:   usize,
     pub indexed_audio:   usize,
     pub indexed_image:   usize,
+    pub indexed_other:   usize,
     pub archives_opened: usize,
     pub duplicates:      usize,
     pub bytes_dup:       u64,
@@ -194,6 +197,7 @@ pub struct ScanStats {
 
 impl ScanStats {
     pub fn total_indexed(&self) -> usize {
-        self.indexed_3d + self.indexed_video + self.indexed_audio + self.indexed_image
+        self.indexed_3d + self.indexed_video + self.indexed_audio
+            + self.indexed_image + self.indexed_other
     }
 }

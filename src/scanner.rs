@@ -81,10 +81,8 @@ impl Scanner {
 
             // ── Archivo de media directo ───────────────────────────────────
             if let Some(media_type) = MediaType::from_extension(&ext) {
-                // Trabajo pesado SIN lock: leer, hashear, parsear
                 match self.build_entry(path, &ext, &media_type) {
                     Ok(entry) => {
-                        // Lock breve: solo insertar en BD + actualizar stats
                         let mut s = stats.lock().unwrap();
                         self.insert_entry(entry, &mut s);
                     }
@@ -101,6 +99,8 @@ impl Scanner {
             }
 
             // ── Comprimido ─────────────────────────────────────────────────
+            let is_archive = ArchiveType::from_path(path).is_some();
+
             if let Some(archive_type) = ArchiveType::from_path(path) {
                 // Filtrar partes extra de multi-part
                 if archive_type == ArchiveType::Rar && is_rar_multipart(&name_lower) {
@@ -115,13 +115,14 @@ impl Scanner {
                 match extract_media_files(path, &archive_type) {
                     Ok(files) => {
                         let built: Vec<MediaEntry> = files.into_iter()
-                            .filter_map(|extracted| {
-                                let mt = MediaType::from_extension(&extracted.ext)?;
-                                Some(build_entry_from_memory(
+                            .map(|extracted| {
+                                let mt = MediaType::from_extension(&extracted.ext)
+                                    .unwrap_or(MediaType::Other);
+                                build_entry_from_memory(
                                     &extracted.data, &extracted.name,
                                     &extracted.ext, &mt,
                                     path.to_string_lossy().as_ref(),
-                                ))
+                                )
                             })
                             .collect();
 
@@ -131,6 +132,24 @@ impl Scanner {
                         for entry in built {
                             self.insert_entry(entry, &mut s);
                         }
+                    }
+                    Err(e) => {
+                        let mut s = stats.lock().unwrap();
+                        s.errors += 1;
+                        if self.verbose {
+                            eprintln!("  {} {}: {e}", "✗".red(), path.display());
+                        }
+                    }
+                }
+            }
+
+            // ── Cualquier otro archivo (extensión desconocida) ─────────────
+            // Se indexa igual: hash + tamaño + ruta. Sin metadatos específicos.
+            if !is_archive {
+                match self.build_entry(path, &ext, &MediaType::Other) {
+                    Ok(entry) => {
+                        let mut s = stats.lock().unwrap();
+                        self.insert_entry(entry, &mut s);
                     }
                     Err(e) => {
                         let mut s = stats.lock().unwrap();
@@ -165,6 +184,7 @@ impl Scanner {
             .unwrap_or_default();
 
         let metadata = match media_type {
+            MediaType::Other => Metadata::None,
             MediaType::Video => {
                 Metadata::Video(parsers::video::parse_from_path(&path_str))
             }
@@ -212,6 +232,7 @@ impl Scanner {
                     MediaType::Video   => stats.indexed_video  += 1,
                     MediaType::Audio   => stats.indexed_audio  += 1,
                     MediaType::Image   => stats.indexed_image  += 1,
+                    MediaType::Other   => stats.indexed_other  += 1,
                 }
             }
             Err(e) => {

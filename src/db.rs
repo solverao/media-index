@@ -403,6 +403,7 @@ impl Database {
                 MediaType::Print3D => SearchDetail::Print3D {
                     triangles: r.get::<_, Option<i64>>(17)?.map(|v| v as u64),
                 },
+                MediaType::Other => SearchDetail::Other,
             };
 
             Ok(SearchResult {
@@ -452,4 +453,5 @@ pub enum SearchDetail {
     Video  { duration: Option<f64>, width: Option<u32>, height: Option<u32>, title: Option<String> },
     Image  { width: Option<u32>, height: Option<u32>, camera: Option<String> },
     Print3D { triangles: Option<u64> },
+    Other,
 }

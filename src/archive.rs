@@ -21,7 +21,6 @@ pub fn extract_media_files(path: &Path, archive_type: &ArchiveType) -> Result<Ve
 const MAX_IN_MEMORY: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
 
 fn extract_zip(path: &Path) -> Result<Vec<ExtractedFile>> {
-    use crate::models::MediaType;
     let file = std::fs::File::open(path)?;
     let mut archive = zip::ZipArchive::new(file)?;
     let mut results = vec![];
@@ -30,9 +29,9 @@ fn extract_zip(path: &Path) -> Result<Vec<ExtractedFile>> {
         let mut entry = match archive.by_index(i) {
             Ok(e) => e, Err(_) => continue,
         };
+        if entry.is_dir() { continue; }
         let name = entry.name().to_string();
         let ext  = ext_of(&name);
-        if MediaType::from_extension(&ext).is_none() { continue; }
         if entry.size() > MAX_IN_MEMORY { continue; }
 
         let mut data = Vec::with_capacity(entry.size() as usize);
@@ -43,18 +42,16 @@ fn extract_zip(path: &Path) -> Result<Vec<ExtractedFile>> {
 }
 
 fn extract_7z(path: &Path) -> Result<Vec<ExtractedFile>> {
-    use crate::models::MediaType;
     use sevenz_rust::SevenZReader;
 
     let mut archive = SevenZReader::open(path, sevenz_rust::Password::empty())?;
     let mut results = vec![];
 
     archive.for_each_entries(|entry, reader| {
+        if entry.is_directory() { return Ok(true); }
         let name = entry.name().to_string();
         let ext  = ext_of(&name);
-        if MediaType::from_extension(&ext).is_none() || entry.size() > MAX_IN_MEMORY {
-            return Ok(true);
-        }
+        if entry.size() > MAX_IN_MEMORY { return Ok(true); }
         let mut data = Vec::with_capacity(entry.size() as usize);
         if std::io::copy(reader, &mut data).is_ok() {
             results.push(ExtractedFile { name, data, ext });
@@ -66,7 +63,6 @@ fn extract_7z(path: &Path) -> Result<Vec<ExtractedFile>> {
 }
 
 fn extract_rar(path: &Path) -> Result<Vec<ExtractedFile>> {
-    use crate::models::MediaType;
     use std::process::Command;
 
     let check = Command::new("unrar").arg("--help").output();
@@ -98,7 +94,6 @@ fn extract_rar(path: &Path) -> Result<Vec<ExtractedFile>> {
         let ext = p.extension()
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_default();
-        if MediaType::from_extension(&ext).is_none() { continue; }
 
         let meta = std::fs::metadata(p)?;
         if meta.len() > MAX_IN_MEMORY { continue; }

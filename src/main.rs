@@ -75,7 +75,7 @@ enum Commands {
 }
 
 #[derive(Clone, ValueEnum)]
-enum MediaTypeArg { Td, Video, Audio, Imagen }
+enum MediaTypeArg { Td, Video, Audio, Imagen, Otro }
 
 impl MediaTypeArg {
     fn as_db_str(&self) -> &'static str {
@@ -84,6 +84,7 @@ impl MediaTypeArg {
             Self::Video  => "video",
             Self::Audio  => "audio",
             Self::Imagen => "image",
+            Self::Otro   => "other",
         }
     }
 }
@@ -134,6 +135,7 @@ fn cmd_scan(db: Database, path: &std::path::Path, verbose: bool) -> Result<()> {
     println!("  {} videos",         s.indexed_video.to_string().blue().bold());
     println!("  {} audios",         s.indexed_audio.to_string().magenta().bold());
     println!("  {} imágenes",       s.indexed_image.to_string().yellow().bold());
+    println!("  {} otros",          s.indexed_other.to_string().white().bold());
     println!("  {} comprimidos",    s.archives_opened.to_string().dimmed());
     println!("  {} duplicados ({})", s.duplicates.to_string().red().bold(),
         format_size(s.bytes_dup, DECIMAL).red());
@@ -158,7 +160,7 @@ fn cmd_stats(db: Database) -> Result<()> {
     println!("\n  {:>8}  {:>12}  {}", "Archivos", "Tamaño", "Tipo");
     println!("  {}", "─".repeat(36).dimmed());
 
-    let icons = [("3d", "⬡"), ("video", "▶"), ("audio", "♪"), ("image", "🖼")];
+    let icons = [("3d", "⬡"), ("video", "▶"), ("audio", "♪"), ("image", "🖼"), ("other", "·")];
     for (type_str, count, bytes) in &s.by_type {
         let icon = icons.iter().find(|(k, _)| k == type_str).map(|(_, v)| *v).unwrap_or("·");
         println!("  {:>8}  {:>12}  {} {}",
@@ -212,6 +214,7 @@ fn cmd_dupes(db: Database, tipo: Option<MediaTypeArg>, as_json: bool) -> Result<
             "video" => "▶ VID".blue(),
             "audio" => "♪ AUD".magenta(),
             "image" => "🖼 IMG".yellow(),
+            "other" => "· OTR".white(),
             _       => "? ???".normal(),
         };
         println!("{} {} {} ({})",
@@ -247,6 +250,7 @@ fn cmd_search(db: Database, query: &str, tipo: Option<MediaTypeArg>) -> Result<(
             "video" => "[VID]".blue(),
             "audio" => "[AUD]".magenta(),
             "image" => "[IMG]".yellow(),
+            "other" => "[OTR]".white(),
             _       => "[?]".normal(),
         };
 
@@ -280,6 +284,9 @@ fn cmd_search(db: Database, query: &str, tipo: Option<MediaTypeArg>) -> Result<(
                 let mut v = vec![format_size(r.size_bytes, DECIMAL), r.extension.to_uppercase()];
                 if let Some(t) = triangles { v.push(format!("{t} triángulos")); }
                 v
+            }
+            SearchDetail::Other => {
+                vec![format_size(r.size_bytes, DECIMAL), r.extension.to_uppercase()]
             }
         };
 
