@@ -142,6 +142,27 @@ impl Database {
                 return Ok((canonical_id, false, None));
             }
 
+            // ¿El recién llegado es más "original" que el canónico actual?
+            // Si es así, promoverlo: actualizar current_path en files y registrar
+            // el viejo canónico como duplicado en su lugar.
+            let incoming_score  = copy_score(&entry.current_path);
+            let canonical_score = copy_score(&canonical_path);
+
+            if incoming_score < canonical_score {
+                // El recién llegado parece más original — promoverlo a canónico
+                self.conn.execute(
+                    "UPDATE files SET current_path = ?1, original_name = ?2 WHERE id = ?3",
+                    params![entry.current_path, entry.original_name, canonical_id],
+                )?;
+                // El viejo canónico pasa a ser duplicado
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO duplicates (canonical_id, duplicate_path)
+                     VALUES (?1, ?2)",
+                    params![canonical_id, canonical_path],
+                )?;
+                return Ok((canonical_id, false, None)); // el recién llegado es ahora canónico
+            }
+
             self.conn.execute(
                 "INSERT OR IGNORE INTO duplicates (canonical_id, duplicate_path)
                  VALUES (?1, ?2)",
@@ -476,4 +497,46 @@ pub enum SearchDetail {
     Image  { width: Option<u32>, height: Option<u32>, camera: Option<String> },
     Print3D { triangles: Option<u64> },
     Other,
+}
+
+// ── Helpers internos ──────────────────────────────────────────────────────
+
+/// Devuelve una puntuación de "cuánto parece una copia" basada en el nombre del archivo.
+/// Menor puntuación = más original. Se usa para decidir qué path queda como canónico.
+///
+/// Patrones detectados (Windows/macOS/Linux en español e inglés):
+///   " - copia", " - copia (2)", "- Copy", " (1)", "_copy", "backup", etc.
+fn copy_score(path: &str) -> u32 {
+    let name = std::path::Path::new(path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+
+    let mut score = 0u32;
+
+    // Windows español: "archivo - copia", "archivo - copia (2)"
+    if name.contains(" - copia") { score += 100; }
+
+    // Windows inglés: "file - Copy", "file - Copy (2)"
+    if name.contains(" - copy") { score += 100; }
+
+    // macOS / Linux: "file (1)", "file (2)", ...
+    if name.ends_with(')') {
+        let re = name.trim_end_matches(|c: char| c.is_ascii_digit() || c == ' ' || c == '(');
+        let suffix = &name[re.len()..];
+        if suffix.trim().starts_with('(') { score += 80; }
+    }
+
+    // Sufijos numéricos: "file_1", "file_2", "file 1", "file 2"
+    if name.chars().last().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        let trimmed = name.trim_end_matches(|c: char| c.is_ascii_digit());
+        if trimmed.ends_with('_') || trimmed.ends_with(' ') { score += 50; }
+    }
+
+    // Palabras clave genéricas en el nombre
+    for keyword in &["_copy", "_backup", "_bak", " backup", " bak", "copy_of", "copia_de"] {
+        if name.contains(keyword) { score += 60; }
+    }
+
+    score
 }
