@@ -102,6 +102,9 @@ enum Commands {
         /// Regenerar thumbnails que ya existen
         #[arg(short, long)]
         force: bool,
+        /// Mostrar errores detallados por cada archivo
+        #[arg(short, long)]
+        verbose: bool,
     },
 
     /// Borrar toda la base de datos (pide confirmación)
@@ -147,7 +150,7 @@ fn main() -> Result<()> {
         Commands::Search { query, tipo } => cmd_search(db, &query, tipo),
         Commands::Export { output }      => cmd_export(db, &output),
         Commands::Doctor                  => cmd_doctor(),
-        Commands::Thumbs { tipo, size, quality, force } => cmd_thumbs(db, &cli.db, tipo, size, quality, force),
+        Commands::Thumbs { tipo, size, quality, force, verbose } => cmd_thumbs(db, &cli.db, tipo, size, quality, force, verbose),
         Commands::Clear { .. }           => unreachable!(),
     }
 }
@@ -665,6 +668,37 @@ fn cmd_doctor() -> Result<()> {
         "sudo apt install unrar  /  brew install rar",
     );
 
+    check(
+        "stl-thumb (thumbnails 3D con OpenGL — mejor calidad)",
+        thumbs::stl_thumb_available(),
+        "https://github.com/unlimitedbacon/stl-thumb/releases",
+    );
+
+    // Debug: mostrar qué devuelve stl-thumb exactamente
+    for flag in ["-V", "--version", "--help", "-h", ""] {
+        let result = if flag.is_empty() {
+            std::process::Command::new("stl-thumb").output()
+        } else {
+            std::process::Command::new("stl-thumb").arg(flag).output()
+        };
+        match result {
+            Ok(out) => {
+                println!("    {} stl-thumb {} → exit={} stdout={:?}",
+                    "·".dimmed(),
+                    if flag.is_empty() { "(sin args)" } else { flag },
+                    out.status.code().unwrap_or(-1),
+                    String::from_utf8_lossy(&out.stdout).trim(),
+                );
+                break; // si funciona, con esto basta
+            }
+            Err(e) => {
+                println!("    {} stl-thumb {} → error: {e}",
+                    "·".dimmed(),
+                    if flag.is_empty() { "(sin args)" } else { flag });
+            }
+        }
+    }
+
     println!("\n  {} ZIP, 7Z, audio, imagen: pure Rust — sin dependencias", "✓".green());
     Ok(())
 }
@@ -676,6 +710,7 @@ fn cmd_thumbs(
     size:    u32,
     quality: u8,
     force:   bool,
+    verbose: bool,
 ) -> Result<()> {
     use thumbs::{thumb_dir_for_db, thumb_path, generate_image, generate_image_from_bytes,
                  generate_video, generate_video_from_archive, generate_3d};
@@ -758,10 +793,13 @@ fn cmd_thumbs(
             Ok(_)  => ok += 1,
             Err(e) => {
                 errors += 1;
-                pb.println(format!("  {} {}: {e}", "✗".red(),
+                pb.println(format!("  {} {}: {}",
+                    "✗".red(),
                     std::path::Path::new(path).file_name()
                         .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default()));
+                        .unwrap_or_default(),
+                    if verbose { e.to_string() } else { e.to_string().chars().take(80).collect() }
+                ));
             }
         }
 

@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use anyhow::Result;
+use colored::Colorize;
 
 pub const DEFAULT_SIZE:    u32 = 256;
 pub const DEFAULT_QUALITY: u8  = 85;
@@ -161,7 +162,21 @@ pub fn generate_video_from_archive(
     result
 }
 
-/// Thumbnail de modelo 3D: proyección isométrica de la malla.
+/// Comprueba si stl-thumb está instalado en el PATH.
+pub fn stl_thumb_available() -> bool {
+    // stl-thumb usa -V para version, no --version
+    std::process::Command::new("stl-thumb")
+        .arg("-V")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Thumbnail de modelo 3D.
+/// Si stl-thumb está instalado lo usa (mejor calidad con OpenGL).
+/// Si no, usa el renderer interno como fallback.
 /// Soporta STL (binario y ASCII), OBJ y 3MF.
 pub fn generate_3d(
     data:      &[u8],
@@ -171,12 +186,73 @@ pub fn generate_3d(
     size:      u32,
     quality:   u8,
 ) -> Result<()> {
+    // stl-thumb soporta STL, OBJ y 3MF — todos los formatos que manejamos
+    let ext_lower = ext.to_lowercase();
+    let stlthumb_supported = matches!(ext_lower.as_str(), "stl" | "obj" | "3mf");
+
+    if stlthumb_supported && stl_thumb_available() {
+        let tmp = std::env::temp_dir()
+            .join(format!("media_idx_3d_{hash}.{ext_lower}"));
+        std::fs::write(&tmp, data)?;
+        let result = generate_3d_stlthumb(
+            tmp.to_string_lossy().as_ref(),
+            hash, thumb_dir, size,
+        );
+        let _ = std::fs::remove_file(&tmp);
+        match result {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                // Informar del fallo para que el usuario pueda diagnosticar
+                eprintln!("  {} stl-thumb falló, usando renderer interno: {e}", "⚠".yellow());
+            }
+        }
+    }
+
+    // Renderer interno: funciona sin GPU, sin dependencias externas
     let (verts, tris) = parse_3d_geometry(data, ext);
     if verts.is_empty() {
         anyhow::bail!("Sin vértices en el modelo .{ext}");
     }
     let img = render_isometric(&verts, &tris, size);
     write_jpeg(&img, hash, thumb_dir, quality)
+}
+
+/// Genera thumbnail usando stl-thumb (OpenGL, mucho mejor calidad).
+fn generate_3d_stlthumb(
+    model_path: &str,
+    hash:       &str,
+    thumb_dir:  &Path,
+    size:       u32,
+) -> Result<()> {
+    let out = thumb_path(thumb_dir, hash);
+    std::fs::create_dir_all(out.parent().unwrap())?;
+    let size_str = size.to_string();
+    let out_str  = out.to_string_lossy().to_string();
+
+    // Sintaxis: stl-thumb <input> <output> -s <size> --recalc-normals
+    // --recalc-normals: recalcula normales para modelos con winding inconsistente
+    // LIBGL_ALWAYS_SOFTWARE=1 permite que stl-thumb funcione en entornos sin
+    // GPU fisica (WSL2, servidores headless) usando el renderer de software de Mesa.
+    let result = std::process::Command::new("stl-thumb")
+        .env("LIBGL_ALWAYS_SOFTWARE", "1")
+        .args([model_path, &out_str, "-s", &size_str])
+        .output();
+
+    match result {
+        Ok(o) if o.status.success() => {}
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            anyhow::bail!("stl-thumb exit {}: {}", o.status, stderr.trim())
+        }
+        Err(e) => anyhow::bail!("stl-thumb no pudo ejecutarse: {e}"),
+    }
+
+    if out.exists() && out.metadata().map(|m| m.len()).unwrap_or(0) > 100 {
+        return Ok(());
+    }
+
+    let _ = std::fs::remove_file(&out);
+    anyhow::bail!("stl-thumb no generó output para {model_path}")
 }
 
 // ── Renderizador isométrico ───────────────────────────────────────────────
