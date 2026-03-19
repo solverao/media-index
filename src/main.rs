@@ -21,7 +21,7 @@ use parsers::video::ffprobe_available;
 #[derive(Parser)]
 #[command(
     name    = "media-index",
-    about   = "Indexador de archivos 3D, video, audio e imagen con deduplicación",
+    about   = "3D, video, audio and image file indexer with deduplication",
     version = "0.1.0",
 )]
 struct Cli {
@@ -34,118 +34,118 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Escanear un directorio e indexar todos los archivos de media
+    /// Scan a directory and index all media files
     Scan {
         path: PathBuf,
         #[arg(short, long)]
         verbose: bool,
     },
 
-    /// Vigilar un directorio e indexar cambios en tiempo real
+    /// Watch a directory and index changes in real time
     Watch {
         path: PathBuf,
         #[arg(short, long)]
         verbose: bool,
-        /// Segundos de espera antes de procesar un evento (default: 2)
+        /// Seconds to wait before processing an event (default: 2)
         #[arg(short, long, default_value = "2")]
         debounce: u64,
     },
 
-    /// Estadísticas generales de la colección
+    /// General collection statistics
     Stats,
 
-    /// Listar duplicados (por tipo o todos)
+    /// List duplicates (by type or all)
     Dupes {
         #[arg(short, long)]
-        tipo: Option<MediaTypeArg>,
+        r#type: Option<MediaTypeArg>,
         #[arg(short, long)]
         json: bool,
-        /// Borrar duplicados en disco. Los que están dentro de comprimidos se reportan sin tocar.
+        /// Delete duplicates from disk. Those inside archives are reported but not touched.
         #[arg(short, long)]
         delete: bool,
-        /// Con --delete: mostrar qué se borraría sin borrar nada realmente.
+        /// With --delete: show what would be deleted without actually deleting anything.
         #[arg(long)]
         dry_run: bool,
-        /// Con --delete: si TODOS los archivos de un comprimido son duplicados, borra el comprimido entero.
+        /// With --delete: if ALL files in an archive are duplicates, delete the whole archive.
         #[arg(short, long)]
         aggressive: bool,
-        /// Con --delete: si el canónico es un archivo suelto y ya existe dentro de un comprimido,
-        /// borrar el archivo suelto (el contenido sigue en el comprimido).
+        /// With --delete: if the canonical is a loose file and already exists inside an archive,
+        /// delete the loose file (the content remains in the archive).
         #[arg(short = 'p', long)]
         prefer_archive: bool,
     },
 
-    /// Buscar archivos por nombre
+    /// Search files by name
     Search {
         query: String,
         #[arg(short, long)]
-        tipo: Option<MediaTypeArg>,
+        r#type: Option<MediaTypeArg>,
     },
 
-    /// Exportar índice a JSON
+    /// Export index to JSON
     Export {
         #[arg(short, long, default_value = "media_export.json")]
         output: PathBuf,
     },
 
-    /// Verificar dependencias opcionales
+    /// Check optional dependencies
     Doctor,
 
-    /// Re-hashear archivos indexados y detectar modificados, corrompidos o faltantes
+    /// Re-hash indexed files and detect modified, corrupted or missing ones
     Verify {
-        /// Eliminar de la BD las entradas con archivos ya no existentes o corrompidos
+        /// Remove from the DB entries whose files no longer exist or are corrupted
         #[arg(short, long)]
         prune: bool,
-        /// Mostrar solo los archivos con problemas (omitir los OK)
+        /// Show only files with problems (skip OK ones)
         #[arg(short, long)]
         quiet: bool,
     },
 
-    /// Generar thumbnails de imágenes, videos y modelos 3D
+    /// Generate thumbnails for images, videos and 3D models
     Thumbs {
-        /// Filtrar por tipo (por defecto genera los tres tipos)
+        /// Filter by type (generates all three types by default)
         #[arg(short, long)]
-        tipo: Option<MediaTypeArg>,
-        /// Tamaño en píxeles del lado del cuadrado
+        r#type: Option<MediaTypeArg>,
+        /// Thumbnail square side size in pixels
         #[arg(short, long, default_value = "256")]
         size: u32,
-        /// Calidad JPEG (1-100)
+        /// JPEG quality (1-100)
         #[arg(short, long, default_value = "85")]
         quality: u8,
-        /// Regenerar thumbnails que ya existen
+        /// Regenerate thumbnails that already exist
         #[arg(short, long)]
         force: bool,
-        /// Mostrar errores detallados por cada archivo
+        /// Show detailed errors for each file
         #[arg(short, long)]
         verbose: bool,
     },
 
-    /// Limpiar entradas no deseadas de la BD sin borrar archivos del disco
+    /// Remove unwanted DB entries without deleting files from disk
     Clean {
-        /// Eliminar entradas de basura macOS (__MACOSX/, ._, .DS_Store) indexadas por error
+        /// Remove macOS junk entries (__MACOSX/, ._, .DS_Store) indexed by mistake
         #[arg(long)]
         macos_junk: bool,
     },
 
-    /// Borrar toda la base de datos (pide confirmación)
+    /// Delete the entire database (asks for confirmation)
     Clear {
-        /// No pedir confirmación (útil en scripts)
+        /// Skip confirmation prompt (useful in scripts)
         #[arg(short, long)]
         force: bool,
     },
 }
 
 #[derive(Clone, ValueEnum)]
-enum MediaTypeArg { Td, Video, Audio, Imagen, Otro }
+enum MediaTypeArg { Td, Video, Audio, Image, Other }
 
 impl MediaTypeArg {
     fn as_db_str(&self) -> &'static str {
         match self {
-            Self::Td     => "3d",
-            Self::Video  => "video",
-            Self::Audio  => "audio",
-            Self::Imagen => "image",
-            Self::Otro   => "other",
+            Self::Td    => "3d",
+            Self::Video => "video",
+            Self::Audio => "audio",
+            Self::Image => "image",
+            Self::Other => "other",
         }
     }
 }
@@ -155,7 +155,7 @@ impl MediaTypeArg {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Clear no necesita abrir (ni crear) la BD
+    // Clear does not need to open (or create) the DB
     if let Commands::Clear { force } = cli.command {
         return cmd_clear(&cli.db, force);
     }
@@ -166,56 +166,56 @@ fn main() -> Result<()> {
         Commands::Scan { path, verbose }  => cmd_scan(db, &path, verbose),
         Commands::Watch { path, verbose, debounce } => cmd_watch(db, &path, verbose, debounce),
         Commands::Stats                   => cmd_stats(db),
-        Commands::Dupes { tipo, json, delete, dry_run, aggressive, prefer_archive } => cmd_dupes(db, tipo, json, delete, dry_run, aggressive, prefer_archive),
-        Commands::Search { query, tipo } => cmd_search(db, &query, tipo),
+        Commands::Dupes { r#type, json, delete, dry_run, aggressive, prefer_archive } => cmd_dupes(db, r#type, json, delete, dry_run, aggressive, prefer_archive),
+        Commands::Search { query, r#type } => cmd_search(db, &query, r#type),
         Commands::Export { output }      => cmd_export(db, &output),
         Commands::Doctor                  => cmd_doctor(),
         Commands::Verify { prune, quiet }  => cmd_verify(db, prune, quiet),
         Commands::Clean { macos_junk }      => cmd_clean(db, macos_junk),
-        Commands::Thumbs { tipo, size, quality, force, verbose } => cmd_thumbs(db, &cli.db, tipo, size, quality, force, verbose),
+        Commands::Thumbs { r#type, size, quality, force, verbose } => cmd_thumbs(db, &cli.db, r#type, size, quality, force, verbose),
         Commands::Clear { .. }           => unreachable!(),
     }
 }
 
-// ── Comandos ──────────────────────────────────────────────────────────────
+// ── Commands ──────────────────────────────────────────────────────────────
 
 fn cmd_scan(db: Database, path: &std::path::Path, verbose: bool) -> Result<()> {
     if !path.exists() {
-        anyhow::bail!("El directorio no existe: {}", path.display());
+        anyhow::bail!("Directory does not exist: {}", path.display());
     }
 
     if !ffprobe_available() {
-        println!("{} ffprobe no encontrado — metadatos de video no disponibles",
+        println!("{} ffprobe not found — video metadata unavailable",
             "⚠".yellow());
-        println!("  Instalar: sudo apt install ffmpeg  /  brew install ffmpeg\n");
+        println!("  Install: sudo apt install ffmpeg  /  brew install ffmpeg\n");
     }
 
-    println!("{}", format!("Escaneando: {}", path.display()).bold().cyan());
+    println!("{}", format!("Scanning: {}", path.display()).bold().cyan());
 
     let scanner = Scanner::new(db, verbose);
     let s       = scanner.scan(path)?;
 
-    println!("\n{}", "─── Resultado ────────────────────────────────".dimmed());
-    println!("  {} archivos 3D",    s.indexed_3d.to_string().green().bold());
-    println!("  {} videos",         s.indexed_video.to_string().blue().bold());
-    println!("  {} audios",         s.indexed_audio.to_string().magenta().bold());
-    println!("  {} imágenes",       s.indexed_image.to_string().yellow().bold());
-    println!("  {} otros",          s.indexed_other.to_string().white().bold());
-    println!("  {} comprimidos",    s.archives_opened.to_string().dimmed());
-    println!("  {} duplicados ({})", s.duplicates.to_string().red().bold(),
+    println!("\n{}", "─── Result ───────────────────────────────────".dimmed());
+    println!("  {} 3D files",   s.indexed_3d.to_string().green().bold());
+    println!("  {} videos",     s.indexed_video.to_string().blue().bold());
+    println!("  {} audio",      s.indexed_audio.to_string().magenta().bold());
+    println!("  {} images",     s.indexed_image.to_string().yellow().bold());
+    println!("  {} other",      s.indexed_other.to_string().white().bold());
+    println!("  {} archives",   s.archives_opened.to_string().dimmed());
+    println!("  {} duplicates ({})", s.duplicates.to_string().red().bold(),
         format_size(s.bytes_dup, DECIMAL).red());
     if s.errors > 0 {
-        println!("  {} errores", s.errors.to_string().red());
+        println!("  {} errors", s.errors.to_string().red());
     }
     println!("  {}", "──────────────────────────────────────".dimmed());
-    println!("  {} indexados en total", s.total_indexed().to_string().cyan().bold());
+    println!("  {} indexed total", s.total_indexed().to_string().cyan().bold());
 
     if s.partial_hashes > 0 {
-        println!("\n  {} {} archivo(s) grandes hasheados parcialmente (>{}) — deduplicación aproximada",
+        println!("\n  {} {} large file(s) partially hashed (>{}) — approximate deduplication",
             "⚠".yellow(),
             s.partial_hashes.to_string().yellow(),
             "100 MB".bold());
-        println!("  {} Usa {} para detectar falsos positivos.",
+        println!("  {} Use {} to detect false positives.",
             " ".normal(),
             "verify".bold());
     }
@@ -228,16 +228,16 @@ fn cmd_watch(db: Database, path: &std::path::Path, verbose: bool, debounce_secs:
     use std::time::Duration;
 
     if !path.exists() {
-        anyhow::bail!("El directorio no existe: {}", path.display());
+        anyhow::bail!("Directory does not exist: {}", path.display());
     }
 
     if !ffprobe_available() {
-        println!("{} ffprobe no encontrado — metadatos de video no disponibles", "⚠".yellow());
-        println!("  Instalar: sudo apt install ffmpeg  /  brew install ffmpeg\n");
+        println!("{} ffprobe not found — video metadata unavailable", "⚠".yellow());
+        println!("  Install: sudo apt install ffmpeg  /  brew install ffmpeg\n");
     }
 
-    // Escaneo inicial completo
-    println!("{}", format!("Escaneo inicial: {}", path.display()).bold().cyan());
+    // Initial full scan
+    println!("{}", format!("Initial scan: {}", path.display()).bold().cyan());
     let scanner = Scanner::new(db, verbose);
     let s = scanner.scan(path)?;
     println!("  {} indexados  {} duplicados\n",
@@ -253,18 +253,18 @@ fn cmd_watch(db: Database, path: &std::path::Path, verbose: bool, debounce_secs:
 
     debouncer.watcher().watch(path, RecursiveMode::Recursive)?;
 
-    println!("{} Vigilando {}  {}",
+    println!("{} Watching {}  {}",
         "👁",
         path.display().to_string().bold(),
-        format!("(debounce {}s — Ctrl+C para salir)", debounce_secs).dimmed());
+        format!("(debounce {}s — Ctrl+C to quit)", debounce_secs).dimmed());
 
     for events in rx {
         let events = match events {
             Ok(e)  => e,
-            Err(e) => { eprintln!("{} Error de watcher: {e:?}", "✗".red()); continue; }
+            Err(e) => { eprintln!("{} Watcher error: {e:?}", "✗".red()); continue; }
         };
 
-        // Deduplicar paths en este batch
+        // Deduplicate paths in this batch
         let mut to_index:  std::collections::HashSet<PathBuf> = Default::default();
         let mut had_remove = false;
 
@@ -282,16 +282,16 @@ fn cmd_watch(db: Database, path: &std::path::Path, verbose: bool, debounce_secs:
             }
         }
 
-        // Borrados → cleanup en BD
+        // Deletions → cleanup in DB
         if had_remove {
             match scanner.cleanup() {
                 Ok((f, d)) if f > 0 || d > 0 =>
-                    println!("  {} {} entrada(s) eliminadas de la BD", "🧹", f + d),
+                    println!("  {} {} entry/ies removed from DB", "🧹", f + d),
                 _ => {}
             }
         }
 
-        // Nuevos / modificados → indexar
+        // New / modified → index
         for file_path in &to_index {
             let ext = file_path.extension()
                 .map(|e| e.to_string_lossy().to_lowercase())
@@ -311,13 +311,13 @@ fn cmd_watch(db: Database, path: &std::path::Path, verbose: bool, debounce_secs:
 fn cmd_stats(db: Database) -> Result<()> {
     let s = db.stats()?;
 
-    println!("{}", "─── Colección ────────────────────────────────".bold().cyan());
-    println!("  Total único    : {}", s.total.to_string().green().bold());
-    println!("  Duplicados     : {}", s.dupes.to_string().red());
-    println!("  Tamaño total   : {}", format_size(s.bytes as u64, DECIMAL).yellow());
-    println!("  Lib. por dedup : {}", format_size(s.bytes_dup as u64, DECIMAL).red());
+    println!("{}", "─── Collection ───────────────────────────────".bold().cyan());
+    println!("  Unique total   : {}", s.total.to_string().green().bold());
+    println!("  Duplicates     : {}", s.dupes.to_string().red());
+    println!("  Total size     : {}", format_size(s.bytes as u64, DECIMAL).yellow());
+    println!("  Saved by dedup : {}", format_size(s.bytes_dup as u64, DECIMAL).red());
 
-    println!("\n  {:>8}  {:>12}  {}", "Archivos", "Tamaño", "Tipo");
+    println!("\n  {:>8}  {:>12}  {}", "Files", "Size", "Type");
     println!("  {}", "─".repeat(36).dimmed());
 
     let icons = [("3d", "⬡"), ("video", "▶"), ("audio", "♪"), ("image", "🖼"), ("other", "·")];
@@ -351,7 +351,7 @@ fn cmd_dupes(
     }
 
     if groups.is_empty() {
-        println!("{}", "No hay duplicados 🎉".green());
+        println!("{}", "No duplicates found 🎉".green());
         return Ok(());
     }
 
@@ -372,7 +372,7 @@ fn cmd_dupes(
         .map(|g| g.size_bytes * g.duplicates.len() as u64)
         .sum();
 
-    println!("{} grupos duplicados  —  {} liberables\n",
+    println!("{} duplicate groups  —  {} reclaimable\n",
         groups.len().to_string().red().bold(),
         format_size(total_bytes, DECIMAL).red());
 
@@ -380,7 +380,7 @@ fn cmd_dupes(
         return cmd_dupes_delete(&db, &groups, dry_run, aggressive, prefer_archive);
     }
 
-    // ── Solo listar ────────────────────────────────────────────────────────
+    // ── List only ─────────────────────────────────────────────────────────
     for g in &groups {
         print_dupe_group(g);
     }
@@ -418,13 +418,13 @@ fn cmd_dupes_delete(
     prefer_archive: bool,
 ) -> Result<()> {
     if dry_run {
-        println!("{}", "  [DRY-RUN] Ningún archivo será modificado.\n".yellow().bold());
+        println!("{}", "  [DRY-RUN] No files will be modified.\n".yellow().bold());
     }
 
-    // Separar cada duplicate_path en: archivo suelto vs. dentro de comprimido
+    // Classify each duplicate_path as: loose file vs. inside archive
     struct DeletePlan {
-        path:         String,         // duplicate_path completo
-        archive_path: Option<String>, // Some("/a/b.zip") si es "b.zip::foo.jpg"
+        path:         String,         // full duplicate_path
+        archive_path: Option<String>, // Some("/a/b.zip") if "b.zip::foo.jpg"
     }
 
     let plans: Vec<DeletePlan> = groups.iter()
@@ -439,13 +439,13 @@ fn cmd_dupes_delete(
         })
         .collect();
 
-    // ── --prefer-archive: canónicos sueltos que ya viven en un comprimido ──
+    // ── --prefer-archive: loose canonicals that already live in an archive ──
     let mut deleted_files     = 0usize;
     let mut freed_bytes       = 0u64;
     let mut errors_delete     = 0usize;
-    // Paths de canónicos que borramos en este paso — necesario para que
-    // --aggressive no asuma que el comprimido es la única copia cuando
-    // el canónico acaba de borrarse en la misma ejecución.
+    // Paths of canonicals deleted in this step — needed so that
+    // --aggressive does not assume the archive is the only copy when
+    // the canonical was just deleted in the same run.
     let mut deleted_canonicals: std::collections::HashSet<String> = Default::default();
 
     if prefer_archive {
@@ -464,7 +464,7 @@ fn cmd_dupes_delete(
                     println!("  {} {} {}",
                         "~".cyan(),
                         g.canonical_path.dimmed(),
-                        "(canónico suelto — copia en comprimido)".dimmed());
+                        "(loose canonical — copy in archive)".dimmed());
                 } else {
                     match p.metadata() {
                         Ok(meta) => {
@@ -476,7 +476,7 @@ fn cmd_dupes_delete(
                                     println!("  {} {} {}",
                                         "✓".green(),
                                         g.canonical_path.dimmed(),
-                                        "(canónico suelto — copia en comprimido)".dimmed());
+                                        "(loose canonical — copy in archive)".dimmed());
                                 }
                                 Err(e) => {
                                     errors_delete += 1;
@@ -487,7 +487,7 @@ fn cmd_dupes_delete(
                         Err(_) => {
                             deleted_files += 1;
                             deleted_canonicals.insert(g.canonical_path.clone());
-                            println!("  {} {} (ya no existía)", "·".dimmed(), g.canonical_path.dimmed());
+                            println!("  {} {} (no longer existed)", "·".dimmed(), g.canonical_path.dimmed());
                         }
                     }
                 }
@@ -495,7 +495,7 @@ fn cmd_dupes_delete(
         }
     }
 
-    // ── Archivos sueltos ───────────────────────────────────────────────────
+    // ── Loose files ───────────────────────────────────────────────────────
     let loose: Vec<&DeletePlan> = plans.iter().filter(|p| p.archive_path.is_none()).collect();
 
     for plan in &loose {
@@ -522,32 +522,32 @@ fn cmd_dupes_delete(
                 }
                 Err(_) => {
                     deleted_files += 1;
-                    println!("  {} {} (ya no existía)", "·".dimmed(), plan.path.dimmed());
+                    println!("  {} {} (no longer existed)", "·".dimmed(), plan.path.dimmed());
                 }
             }
         }
     }
 
-    // ── Archivos en comprimidos ────────────────────────────────────────────
+    // ── Files inside archives ──────────────────────────────────────────────
     let in_archives: Vec<&DeletePlan> = plans.iter().filter(|p| p.archive_path.is_some()).collect();
 
     if !in_archives.is_empty() && !aggressive {
-        println!("\n{} {} duplicado(s) dentro de comprimidos — no se tocaron:",
+        println!("\n{} {} duplicate(s) inside archives — left untouched:",
             "⊡".yellow().bold(),
             in_archives.len().to_string().yellow());
         for plan in &in_archives {
             println!("  {} {}", "·".yellow(), plan.path.yellow());
         }
-        println!("  {} Usa {} para borrar el comprimido si todos sus archivos son duplicados.",
+        println!("  {} Use {} to delete the archive if all its files are duplicates.",
             "→".dimmed(),
             "--aggressive".bold());
     }
 
-    // ── Modo agresivo: borrar comprimidos completos si todo su contenido tiene copia ──
+    // ── Aggressive mode: delete whole archives if all their content has copies ──
     let mut deleted_archives = 0usize;
 
     if aggressive && !in_archives.is_empty() {
-        // Agrupar duplicate_paths por comprimido
+        // Group duplicate_paths by archive
         let mut by_archive: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
         for plan in &in_archives {
@@ -556,9 +556,9 @@ fn cmd_dupes_delete(
             }
         }
 
-        // Convergencia iterativa: marcar comprimidos como borrables solo si
-        // todo su contenido tiene copia fuera del conjunto de borrables.
-        // Repetir hasta que el conjunto no cambie (fixpoint).
+        // Iterative convergence: mark archives as deletable only if
+        // all their content has a copy outside the deletable set.
+        // Repeat until the set no longer changes (fixpoint).
         let mut to_delete: std::collections::HashSet<String> = Default::default();
         loop {
             let prev_len = to_delete.len();
@@ -575,15 +575,15 @@ fn cmd_dupes_delete(
                     Err(e)    => eprintln!("  {} {}: {e}", "✗".red(), archive_path),
                 }
             }
-            if to_delete.len() == prev_len { break; } // fixpoint alcanzado
+            if to_delete.len() == prev_len { break; } // fixpoint reached
         }
 
-        // Ejecutar (o simular) borrados
+        // Execute (or simulate) deletions
         for (archive_path, dup_count) in &by_archive {
             let arc = std::path::Path::new(archive_path);
 
             if !arc.exists() {
-                println!("  {} {} (ya no existía)", "·".dimmed(), archive_path.dimmed());
+                println!("  {} {} (no longer existed)", "·".dimmed(), archive_path.dimmed());
                 deleted_archives += 1;
                 continue;
             }
@@ -595,7 +595,7 @@ fn cmd_dupes_delete(
                     deleted_archives += 1;
                     println!("  {} {} {}",
                         "~".cyan(),
-                        "comprimido completo:".dimmed(),
+                        "full archive:".dimmed(),
                         archive_path.dimmed());
                 } else {
                     match std::fs::remove_file(arc) {
@@ -604,7 +604,7 @@ fn cmd_dupes_delete(
                             deleted_archives += 1;
                             println!("  {} {} {}",
                                 "✓".green(),
-                                "comprimido completo:".dimmed(),
+                                "full archive:".dimmed(),
                                 archive_path.dimmed());
                         }
                         Err(e) => {
@@ -614,7 +614,7 @@ fn cmd_dupes_delete(
                     }
                 }
             } else {
-                println!("  {} {} — tiene archivos únicos o es la única copia, no se borra ({} duplicado(s) dentro)",
+                println!("  {} {} — has unique files or is the only copy, skipping ({} duplicate(s) inside)",
                     "⊡".yellow(),
                     archive_path.yellow(),
                     dup_count);
@@ -622,36 +622,36 @@ fn cmd_dupes_delete(
         }
     }
 
-    // ── Resumen ────────────────────────────────────────────────────────────
-    println!("\n{}", "─── Resultado ────────────────────────────────".dimmed());
+    // ── Summary ────────────────────────────────────────────────────────────
+    println!("\n{}", "─── Result ───────────────────────────────────".dimmed());
     if dry_run {
         println!("  {} {}", "[DRY-RUN]".cyan().bold(),
-            "no se borró nada — ejecuta sin --dry-run para aplicar".dimmed());
+            "nothing deleted — run without --dry-run to apply".dimmed());
         if deleted_files > 0 {
-            println!("  {} archivo(s) se borrarían", deleted_files.to_string().cyan().bold());
+            println!("  {} file(s) would be deleted", deleted_files.to_string().cyan().bold());
         }
         if deleted_archives > 0 {
-            println!("  {} comprimido(s) se borrarían", deleted_archives.to_string().cyan().bold());
+            println!("  {} archive(s) would be deleted", deleted_archives.to_string().cyan().bold());
         }
-        println!("  {} se liberarían", format_size(freed_bytes, DECIMAL).cyan().bold());
+        println!("  {} would be freed", format_size(freed_bytes, DECIMAL).cyan().bold());
     } else {
         if deleted_files > 0 {
-            println!("  {} archivo(s) borrado(s)", deleted_files.to_string().green().bold());
+            println!("  {} file(s) deleted", deleted_files.to_string().green().bold());
         }
         if deleted_archives > 0 {
-            println!("  {} comprimido(s) borrado(s)", deleted_archives.to_string().green().bold());
+            println!("  {} archive(s) deleted", deleted_archives.to_string().green().bold());
         }
-        println!("  {} liberados", format_size(freed_bytes, DECIMAL).red().bold());
+        println!("  {} freed", format_size(freed_bytes, DECIMAL).red().bold());
         if errors_delete > 0 {
-            println!("  {} error(es)", errors_delete.to_string().red());
+            println!("  {} error(s)", errors_delete.to_string().red());
         }
-        // Sincronizar la BD con lo que acaba de borrarse del disco
+        // Sync the DB with what was just deleted from disk
         if deleted_files > 0 || deleted_archives > 0 {
             match db.cleanup_stale() {
                 Ok((f, d)) if f > 0 || d > 0 =>
-                    println!("  {} BD sincronizada ({} entrada(s) eliminadas)", "🧹".dimmed(), f + d),
+                    println!("  {} DB synced ({} entry/ies removed)", "🧹".dimmed(), f + d),
                 Ok(_)  => {}
-                Err(e) => eprintln!("  {} Error al sincronizar BD: {e}", "✗".red()),
+                Err(e) => eprintln!("  {} Error syncing DB: {e}", "✗".red()),
             }
         }
     }
@@ -666,7 +666,7 @@ fn cmd_search(db: Database, query: &str, tipo: Option<MediaTypeArg>) -> Result<(
     let results = db.search(query, type_filter)?;
 
     if results.is_empty() {
-        println!("Sin resultados para \"{}\"", query);
+        println!("No results for \"{}\"", query);
         return Ok(());
     }
 
@@ -711,7 +711,7 @@ fn cmd_search(db: Database, query: &str, tipo: Option<MediaTypeArg>) -> Result<(
             }
             SearchDetail::Print3D { triangles } => {
                 let mut v = vec![format_size(r.size_bytes, DECIMAL), r.extension.to_uppercase()];
-                if let Some(t) = triangles { v.push(format!("{t} triángulos")); }
+                if let Some(t) = triangles { v.push(format!("{t} triangles")); }
                 v
             }
             SearchDetail::Other => {
@@ -744,40 +744,40 @@ fn cmd_export(db: Database, output: &std::path::Path) -> Result<()> {
     });
 
     std::fs::write(output, serde_json::to_string_pretty(&payload)?)?;
-    println!("Exportado a {}", output.display().to_string().green());
+    println!("Exported to {}", output.display().to_string().green());
     Ok(())
 }
 
 fn cmd_doctor() -> Result<()> {
-    println!("{}\n", "─── Diagnóstico de dependencias ──────────────".bold().cyan());
+    println!("{}\n", "─── Dependency check ─────────────────────────".bold().cyan());
 
     let check = |name: &str, available: bool, install: &str| {
         if available {
             println!("  {} {}", "✓".green(), name.bold());
         } else {
-            println!("  {} {} — instalar: {}", "✗".red(), name.bold(), install.dimmed());
+            println!("  {} {} — install: {}", "✗".red(), name.bold(), install.dimmed());
         }
     };
 
     check(
-        "ffprobe (metadatos de video)",
+        "ffprobe (video metadata)",
         ffprobe_available(),
         "sudo apt install ffmpeg  /  brew install ffmpeg",
     );
 
     check(
-        "unrar (archivos .rar)",
+        "unrar (.rar files)",
         std::process::Command::new("unrar").arg("--help").output().is_ok(),
         "sudo apt install unrar  /  brew install rar",
     );
 
     check(
-        "stl-thumb (thumbnails 3D con OpenGL — mejor calidad)",
+        "stl-thumb (3D thumbnails via OpenGL — better quality)",
         thumbs::stl_thumb_available(),
         "https://github.com/unlimitedbacon/stl-thumb/releases",
     );
 
-    // Debug: mostrar qué devuelve stl-thumb exactamente
+    // Debug: show exactly what stl-thumb returns
     for flag in ["-V", "--version", "--help", "-h", ""] {
         let result = if flag.is_empty() {
             std::process::Command::new("stl-thumb").output()
@@ -788,21 +788,21 @@ fn cmd_doctor() -> Result<()> {
             Ok(out) => {
                 println!("    {} stl-thumb {} → exit={} stdout={:?}",
                     "·".dimmed(),
-                    if flag.is_empty() { "(sin args)" } else { flag },
+                    if flag.is_empty() { "(no args)" } else { flag },
                     out.status.code().unwrap_or(-1),
                     String::from_utf8_lossy(&out.stdout).trim(),
                 );
-                break; // si funciona, con esto basta
+                break; // if it works, this is enough
             }
             Err(e) => {
                 println!("    {} stl-thumb {} → error: {e}",
                     "·".dimmed(),
-                    if flag.is_empty() { "(sin args)" } else { flag });
+                    if flag.is_empty() { "(no args)" } else { flag });
             }
         }
     }
 
-    println!("\n  {} ZIP, 7Z, audio, imagen: pure Rust — sin dependencias", "✓".green());
+    println!("\n  {} ZIP, 7Z, audio, image: pure Rust — no dependencies", "✓".green());
     Ok(())
 }
 
@@ -823,13 +823,13 @@ fn cmd_thumbs(
     let files       = db.files_for_thumbs(type_filter)?;
 
     if files.is_empty() {
-        println!("{}", "No hay archivos candidatos para thumbnails.".dimmed());
+        println!("{}", "No candidate files for thumbnails.".dimmed());
         return Ok(());
     }
 
-    println!("{} Generando thumbnails en {}",
+    println!("{} Generating thumbnails in {}",
         "🖼", thumb_dir.display().to_string().bold());
-    println!("  {} archivos  {}px  calidad {}\n",
+    println!("  {} files  {}px  quality {}\n",
         files.len().to_string().cyan(), size, quality);
 
     let pb = ProgressBar::new(files.len() as u64);
@@ -851,7 +851,7 @@ fn cmd_thumbs(
                 .unwrap_or_default()
         );
 
-        // Saltar si ya existe y no se pidió --force
+        // Skip if already exists and --force was not requested
         let t_path = thumb_path(&thumb_dir, hash);
         if t_path.exists() && !force {
             skipped += 1;
@@ -860,12 +860,12 @@ fn cmd_thumbs(
         }
 
         let result = if path.contains("::") {
-            // ── Archivo dentro de comprimido ──────────────────────────────
+            // ── File inside archive ───────────────────────────────────────
             let mut parts = path.splitn(2, "::");
             let archive_path = parts.next().unwrap_or("");
             let inner_name   = parts.next().unwrap_or("");
 
-            // Extraer los bytes del archivo del comprimido
+            // Extract the file's bytes from the archive
             let bytes_result = extract_entry_bytes(archive_path, inner_name);
 
             match bytes_result {
@@ -878,7 +878,7 @@ fn cmd_thumbs(
                 }
             }
         } else {
-            // ── Archivo suelto en disco ───────────────────────────────────
+            // ── Loose file on disk ────────────────────────────────────────
             match media_type {
                 "image" => generate_image(path, hash, &thumb_dir, size, quality),
                 "video" => generate_video(path, hash, &thumb_dir, size, quality),
@@ -909,40 +909,40 @@ fn cmd_thumbs(
         pb.inc(1);
     }
 
-    pb.finish_with_message("listo");
+    pb.finish_with_message("done");
 
-    println!("\n{}", "─── Resultado ────────────────────────────────".dimmed());
-    println!("  {} generados",  ok.to_string().green().bold());
+    println!("\n{}", "─── Result ───────────────────────────────────".dimmed());
+    println!("  {} generated", ok.to_string().green().bold());
     if skipped > 0 {
-        println!("  {} omitidos (ya existían — usa {} para regenerar)",
+        println!("  {} skipped (already existed — use {} to regenerate)",
             skipped.to_string().dimmed(), "--force".bold());
     }
     if errors > 0 {
-        println!("  {} errores", errors.to_string().red());
+        println!("  {} errors", errors.to_string().red());
     }
     println!("  → {}", thumb_dir.display().to_string().dimmed());
 
     Ok(())
 }
 
-/// Extrae los bytes de un archivo específico dentro de un comprimido.
-/// Soporta .zip, .7z y .rar (igual que archive.rs).
+/// Extracts the bytes of a specific file from inside an archive.
+/// Supports .zip, .7z and .rar (same as archive.rs).
 fn extract_entry_bytes(archive_path: &str, inner_name: &str) -> anyhow::Result<Vec<u8>> {
     use crate::models::ArchiveType;
     use std::path::Path;
 
     let arc_path = Path::new(archive_path);
     let arc_type = ArchiveType::from_path(arc_path)
-        .ok_or_else(|| anyhow::anyhow!("Formato de comprimido no soportado: {archive_path}"))?;
+        .ok_or_else(|| anyhow::anyhow!("Unsupported archive format: {archive_path}"))?;
 
     match arc_type {
         ArchiveType::Zip => {
             let file    = std::fs::File::open(arc_path)?;
             let mut zip = zip::ZipArchive::new(file)?;
 
-            // Primero buscar por nombre exacto; si no, buscar por nombre de archivo base
+            // First look for exact name; otherwise search by base filename
             let idx = if zip.by_name(inner_name).is_ok() {
-                // by_name con is_ok no retiene el borrow — buscar el índice real
+                // by_name with is_ok does not keep the borrow — find the real index
                 (0..zip.len()).find(|&i| {
                     zip.by_index(i).ok()
                         .map(|e| e.name() == inner_name)
@@ -958,7 +958,7 @@ fn extract_entry_bytes(archive_path: &str, inner_name: &str) -> anyhow::Result<V
                         .map(|e| e.name().ends_with(&*base))
                         .unwrap_or(false)
                 })
-            }.ok_or_else(|| anyhow::anyhow!("{inner_name} no encontrado en {archive_path}"))?;
+            }.ok_or_else(|| anyhow::anyhow!("{inner_name} not found in {archive_path}"))?;
 
             let mut entry = zip.by_index(idx)?;
             let mut data  = Vec::with_capacity(entry.size() as usize);
@@ -977,14 +977,14 @@ fn extract_entry_bytes(archive_path: &str, inner_name: &str) -> anyhow::Result<V
                     let mut data = Vec::new();
                     let _ = std::io::copy(reader, &mut data);
                     found = Some(data);
-                    return Ok(false); // detener iteración
+                    return Ok(false); // stop iteration
                 }
                 Ok(true)
             })?;
-            found.ok_or_else(|| anyhow::anyhow!("{inner_name} no encontrado en {archive_path}"))
+            found.ok_or_else(|| anyhow::anyhow!("{inner_name} not found in {archive_path}"))
         }
         ArchiveType::Rar => {
-            // Para RAR extraemos todo a temp y leemos el archivo buscado
+            // For RAR we extract everything to temp and read the target file
             use std::process::Command;
             let path_hash = {
                 use std::hash::{Hash, Hasher};
@@ -1004,7 +1004,7 @@ fn extract_entry_bytes(archive_path: &str, inner_name: &str) -> anyhow::Result<V
                 .args(["x", "-y", "-inul", archive_path])
                 .arg(&tmp)
                 .status()?;
-            // Buscar el archivo en el directorio temporal
+            // Find the file in the temp directory
             let target = walkdir::WalkDir::new(&tmp)
                 .into_iter()
                 .flatten()
@@ -1018,7 +1018,7 @@ fn extract_entry_bytes(archive_path: &str, inner_name: &str) -> anyhow::Result<V
                 .map(|e| e.path().to_path_buf());
             let result = match &target {
                 Some(p) => std::fs::read(p).map_err(|e| anyhow::anyhow!(e)),
-                None    => Err(anyhow::anyhow!("{inner_name} no encontrado en {archive_path}")),
+                None    => Err(anyhow::anyhow!("{inner_name} not found in {archive_path}")),
             };
             let _ = std::fs::remove_dir_all(&tmp);
             result
@@ -1028,21 +1028,21 @@ fn extract_entry_bytes(archive_path: &str, inner_name: &str) -> anyhow::Result<V
 
 fn cmd_clean(db: Database, macos_junk: bool) -> Result<()> {
     if !macos_junk {
-        println!("{}", "Especifica qué limpiar. Opciones disponibles:".yellow());
-        println!("  {} Eliminar basura macOS (__MACOSX/, ._, .DS_Store)",
+        println!("{}", "Specify what to clean. Available options:".yellow());
+        println!("  {} Remove macOS junk entries (__MACOSX/, ._, .DS_Store)",
             "--macos-junk".bold());
         return Ok(());
     }
 
     let removed = db.purge_macos_junk()?;
     if removed == 0 {
-        println!("{}", "No se encontraron entradas de basura macOS en la BD 🎉".green());
+        println!("{}", "No macOS junk entries found in the DB 🎉".green());
     } else {
-        println!("  {} {} entrada(s) de basura macOS eliminadas de la BD",
+        println!("  {} {} macOS junk entry/ies removed from the DB",
             "✓".green(),
             removed.to_string().green().bold());
-        println!("  {} Los archivos en disco {} fueron tocados.",
-            " ".normal(), "no".bold());
+        println!("  {} Files on disk were {} touched.",
+            " ".normal(), "not".bold());
     }
     Ok(())
 }
@@ -1053,14 +1053,14 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
     let files = db.files_for_verify()?;
 
     if files.is_empty() {
-        println!("{}", "No hay archivos indexados para verificar.".dimmed());
+        println!("{}", "No indexed files to verify.".dimmed());
         return Ok(());
     }
 
-    println!("{} Verificando {} archivo(s){}\n",
+    println!("{} Verifying {} file(s){}\n",
         "🔍".cyan(),
         files.len().to_string().bold(),
-        if prune { " (--prune activo: se eliminarán entradas inválidas)" } else { "" },
+        if prune { " (--prune active: invalid entries will be removed)" } else { "" },
     );
 
     let pb = indicatif::ProgressBar::new(files.len() as u64);
@@ -1070,7 +1070,7 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
 
     let (mut ok, mut missing, mut modified, mut pruned) = (0usize, 0usize, 0usize, 0usize);
 
-    // Umbral de hash parcial — debe coincidir con scanner.rs
+    // Partial hash threshold — must match scanner.rs
     const PARTIAL_HASH_THRESHOLD: u64 = 100 * 1024 * 1024;
     const PARTIAL_CHUNK_SIZE:     u64 = 4   * 1024 * 1024;
 
@@ -1083,13 +1083,13 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
                 .unwrap_or_default()
         );
 
-        // ── 1. ¿Existe en disco? ──────────────────────────────────────────
+        // ── 1. Exists on disk? ────────────────────────────────────────────
         let meta = match p.metadata() {
             Ok(m)  => m,
             Err(_) => {
                 missing += 1;
                 pb.println(format!("  {} {} {}",
-                    "✗".red(), "FALTANTE:".red().bold(), path.dimmed()));
+                    "✗".red(), "MISSING:".red().bold(), path.dimmed()));
                 if prune {
                     let _ = db.remove_file(*id);
                     pruned += 1;
@@ -1101,12 +1101,12 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
 
         let current_size = meta.len();
 
-        // ── 2. ¿Cambió de tamaño? (rápido, sin re-hashear) ───────────────
+        // ── 2. Size changed? (fast, no re-hashing) ───────────────────────
         if current_size != *stored_size {
             modified += 1;
-            pb.println(format!("  {} {} {} (era {}, ahora {})",
+            pb.println(format!("  {} {} {} (was {}, now {})",
                 "!".yellow().bold(),
-                "MODIFICADO:".yellow().bold(),
+                "MODIFIED:".yellow().bold(),
                 path.dimmed(),
                 format_size(*stored_size, DECIMAL).dimmed(),
                 format_size(current_size, DECIMAL).yellow()));
@@ -1118,7 +1118,7 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
             continue;
         }
 
-        // ── 3. Re-hashear y comparar ──────────────────────────────────────
+        // ── 3. Re-hash and compare ────────────────────────────────────────
         let current_hash = if current_size <= PARTIAL_HASH_THRESHOLD {
             match std::fs::read(p) {
                 Ok(data) => blake3::hash(&data).to_hex().to_string(),
@@ -1131,7 +1131,7 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
                 }
             }
         } else {
-            // Hash parcial — misma lógica que scanner::hash_file
+            // Partial hash — same logic as scanner::hash_file
             use std::io::Read;
             let chunk = PARTIAL_CHUNK_SIZE as usize;
             let mut hasher = blake3::Hasher::new();
@@ -1164,7 +1164,7 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
             modified += 1;
             pb.println(format!("  {} {} {}",
                 "!".yellow().bold(),
-                "HASH CAMBIADO:".yellow().bold(),
+                "HASH CHANGED:".yellow().bold(),
                 path.dimmed()));
             if prune {
                 let _ = db.remove_file(*id);
@@ -1180,20 +1180,20 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
         pb.inc(1);
     }
 
-    pb.finish_with_message("listo");
+    pb.finish_with_message("done");
 
-    println!("\n{}", "─── Resultado ────────────────────────────────".dimmed());
+    println!("\n{}", "─── Result ───────────────────────────────────".dimmed());
     println!("  {} OK",            ok.to_string().green().bold());
     if missing > 0 {
-        println!("  {} faltantes",  missing.to_string().red().bold());
+        println!("  {} missing",  missing.to_string().red().bold());
     }
     if modified > 0 {
-        println!("  {} modificados / hash cambiado", modified.to_string().yellow().bold());
+        println!("  {} modified / hash changed", modified.to_string().yellow().bold());
     }
     if prune && pruned > 0 {
-        println!("  {} entrada(s) eliminadas de la BD", pruned.to_string().cyan().bold());
+        println!("  {} entry/ies removed from the DB", pruned.to_string().cyan().bold());
     } else if (missing > 0 || modified > 0) && !prune {
-        println!("  {} Usa {} para eliminar estas entradas de la BD.",
+        println!("  {} Use {} to remove these entries from the DB.",
             "→".dimmed(), "--prune".bold());
     }
 
@@ -1203,23 +1203,23 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
 fn cmd_clear(db_path: &str, force: bool) -> Result<()> {
     if !force {
         println!(
-            "{} Esto borrará {} por completo y no se puede deshacer.",
+            "{} This will permanently delete {} and cannot be undone.",
             "⚠".yellow().bold(),
             db_path.bold(),
         );
-        print!("  ¿Continuar? [s/N] ");
+        print!("  Continue? [y/N] ");
         std::io::Write::flush(&mut std::io::stdout())?;
 
         let mut input = String::new();
         std::io::stdin().read_line(&mut input)?;
 
-        if !matches!(input.trim().to_lowercase().as_str(), "s" | "si" | "sí" | "y" | "yes") {
-            println!("{}", "Cancelado.".dimmed());
+        if !matches!(input.trim().to_lowercase().as_str(), "y" | "yes") {
+            println!("{}", "Cancelled.".dimmed());
             return Ok(());
         }
     }
 
-    // Borrar el archivo .db y el WAL / SHM si existen
+    // Delete the .db file and WAL / SHM if they exist
     for suffix in ["", "-wal", "-shm"] {
         let path = format!("{db_path}{suffix}");
         if std::path::Path::new(&path).exists() {
@@ -1227,7 +1227,7 @@ fn cmd_clear(db_path: &str, force: bool) -> Result<()> {
         }
     }
 
-    println!("{} Base de datos eliminada: {}", "✓".green(), db_path.bold());
+    println!("{} Database deleted: {}", "✓".green(), db_path.bold());
     Ok(())
 }
 

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-// ── Tipo de medio ─────────────────────────────────────────────────────────
+// ── Media type ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum MediaType {
@@ -32,7 +32,7 @@ impl MediaType {
         }
     }
 
-    /// Detectar tipo por extensión
+    /// Detect type by file extension
     pub fn from_extension(ext: &str) -> Option<Self> {
         match ext.to_lowercase().as_str() {
             // 3D
@@ -45,7 +45,7 @@ impl MediaType {
             "mp3" | "flac" | "ogg" | "opus" | "m4a" | "aac" | "wav"
             | "aiff" | "aif" | "wma" | "ape" | "wv" | "mka" | "alac"
             | "dsf" | "dff" => Some(Self::Audio),
-            // Imagen
+            // Image
             "jpg" | "jpeg" | "png" | "webp" | "tiff" | "tif" | "bmp"
             | "gif" | "avif" | "heic" | "heif" | "raw" | "cr2" | "cr3"
             | "nef" | "arw" | "dng" | "orf" | "rw2" | "psd" | "xcf" => Some(Self::Image),
@@ -54,9 +54,9 @@ impl MediaType {
     }
 }
 
-// ── Entrada genérica ──────────────────────────────────────────────────────
+// ── Generic entry ─────────────────────────────────────────────────────────
 
-/// Un archivo indexado de cualquier tipo
+/// An indexed file of any type
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaEntry {
     pub blake3_hash:     String,
@@ -66,12 +66,12 @@ pub struct MediaEntry {
     pub extension:       String,
     pub media_type:      MediaType,
     pub metadata:        Metadata,
-    /// Origen si vino de un comprimido
+    /// Origin if the file came from an archive
     pub source_archive:  Option<String>,
     pub path_in_archive: Option<String>,
 }
 
-// ── Metadatos por tipo ────────────────────────────────────────────────────
+// ── Per-type metadata ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Metadata {
@@ -82,7 +82,7 @@ pub enum Metadata {
     None,
 }
 
-// ── 3D ───────────────────────────────────────────────────────────────────
+// ── 3D ────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Meta3D {
@@ -106,7 +106,7 @@ pub struct MetaVideo {
     pub codec_audio:    Option<String>,
     pub bitrate_kbps:   Option<u64>,
     pub fps:            Option<f64>,
-    /// Tags embebidos
+    /// Embedded tags
     pub title:          Option<String>,
     pub year:           Option<u32>,
     pub container:      Option<String>,
@@ -128,7 +128,7 @@ pub struct MetaAudio {
     pub track_number:   Option<u32>,
 }
 
-// ── Imagen ────────────────────────────────────────────────────────────────
+// ── Image ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MetaImage {
@@ -146,7 +146,7 @@ pub struct MetaImage {
     pub focal_length: Option<f64>,
 }
 
-// ── Comprimidos ───────────────────────────────────────────────────────────
+// ── Archives ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ArchiveType {
@@ -180,7 +180,7 @@ pub fn is_rar_multipart(name: &str) -> bool {
     name.contains(".part") && name.ends_with(".rar")
 }
 
-// ── Stats de escaneo ──────────────────────────────────────────────────────
+// ── Scan stats ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Default)]
 pub struct ScanStats {
@@ -193,8 +193,8 @@ pub struct ScanStats {
     pub duplicates:      usize,
     pub bytes_dup:       u64,
     pub errors:          usize,
-    /// Archivos hasheados parcialmente por superar el umbral de tamaño.
-    /// La deduplicación es aproximada para estos: ver verify.
+    /// Files hashed partially because they exceeded the size threshold.
+    /// Deduplication is approximate for these — see verify.
     pub partial_hashes:  usize,
 }
 
@@ -213,7 +213,7 @@ mod tests {
     // ── MediaType::from_extension ─────────────────────────────────────────
 
     #[test]
-    fn from_extension_imagen() {
+    fn from_extension_image() {
         assert_eq!(MediaType::from_extension("jpg"),  Some(MediaType::Image));
         assert_eq!(MediaType::from_extension("JPG"),  Some(MediaType::Image));  // case insensitive
         assert_eq!(MediaType::from_extension("jpeg"), Some(MediaType::Image));
@@ -274,38 +274,38 @@ mod tests {
     }
 
     #[test]
-    fn from_str_unknown_es_other() {
-        assert_eq!(MediaType::from_str("desconocido"), MediaType::Other);
-        assert_eq!(MediaType::from_str(""),            MediaType::Other);
+    fn from_str_unknown_is_other() {
+        assert_eq!(MediaType::from_str("unknown"), MediaType::Other);
+        assert_eq!(MediaType::from_str(""),        MediaType::Other);
     }
 
     // ── ArchiveType::from_path ────────────────────────────────────────────
 
     #[test]
     fn archive_type_zip() {
-        assert_eq!(ArchiveType::from_path(Path::new("archivo.zip")), Some(ArchiveType::Zip));
-        assert_eq!(ArchiveType::from_path(Path::new("/ruta/al/fondo.ZIP")), Some(ArchiveType::Zip));
+        assert_eq!(ArchiveType::from_path(Path::new("archive.zip")), Some(ArchiveType::Zip));
+        assert_eq!(ArchiveType::from_path(Path::new("/path/to/file.ZIP")), Some(ArchiveType::Zip));
     }
 
     #[test]
     fn archive_type_7z() {
-        assert_eq!(ArchiveType::from_path(Path::new("archivo.7z")),    Some(ArchiveType::SevenZip));
-        assert_eq!(ArchiveType::from_path(Path::new("archivo.7z.001")), Some(ArchiveType::SevenZip));
-        assert_eq!(ArchiveType::from_path(Path::new("archivo.7z.099")), Some(ArchiveType::SevenZip));
+        assert_eq!(ArchiveType::from_path(Path::new("archive.7z")),     Some(ArchiveType::SevenZip));
+        assert_eq!(ArchiveType::from_path(Path::new("archive.7z.001")), Some(ArchiveType::SevenZip));
+        assert_eq!(ArchiveType::from_path(Path::new("archive.7z.099")), Some(ArchiveType::SevenZip));
     }
 
     #[test]
     fn archive_type_rar() {
-        assert_eq!(ArchiveType::from_path(Path::new("archivo.rar")),       Some(ArchiveType::Rar));
-        assert_eq!(ArchiveType::from_path(Path::new("archivo.part1.rar")), Some(ArchiveType::Rar));
-        assert_eq!(ArchiveType::from_path(Path::new("archivo.part10.rar")),Some(ArchiveType::Rar));
+        assert_eq!(ArchiveType::from_path(Path::new("archive.rar")),        Some(ArchiveType::Rar));
+        assert_eq!(ArchiveType::from_path(Path::new("archive.part1.rar")),  Some(ArchiveType::Rar));
+        assert_eq!(ArchiveType::from_path(Path::new("archive.part10.rar")), Some(ArchiveType::Rar));
     }
 
     #[test]
     fn archive_type_none() {
-        assert_eq!(ArchiveType::from_path(Path::new("archivo.mp4")), None);
-        assert_eq!(ArchiveType::from_path(Path::new("archivo.txt")), None);
-        assert_eq!(ArchiveType::from_path(Path::new("Makefile")),    None);
+        assert_eq!(ArchiveType::from_path(Path::new("file.mp4")), None);
+        assert_eq!(ArchiveType::from_path(Path::new("file.txt")), None);
+        assert_eq!(ArchiveType::from_path(Path::new("Makefile")), None);
     }
 
     // ── is_7z_multipart / is_rar_multipart ───────────────────────────────
@@ -315,21 +315,21 @@ mod tests {
         assert!(is_7z_multipart("backup.7z.001"));
         assert!(is_7z_multipart("backup.7z.999"));
         assert!(!is_7z_multipart("backup.7z"));
-        assert!(!is_7z_multipart("backup.7z.abc")); // letras, no dígitos
+        assert!(!is_7z_multipart("backup.7z.abc")); // letters, not digits
     }
 
     #[test]
     fn multipart_rar() {
         assert!(is_rar_multipart("backup.part1.rar"));
         assert!(is_rar_multipart("backup.part99.rar"));
-        assert!(!is_rar_multipart("backup.rar"));           // sin .part
-        assert!(!is_rar_multipart("backup.part1.zip"));     // extensión distinta
+        assert!(!is_rar_multipart("backup.rar"));        // no .part
+        assert!(!is_rar_multipart("backup.part1.zip"));  // different extension
     }
 
     // ── ScanStats::total_indexed ──────────────────────────────────────────
 
     #[test]
-    fn total_indexed_suma_todos_los_tipos() {
+    fn total_indexed_sums_all_types() {
         let s = ScanStats {
             indexed_3d:    1,
             indexed_video: 2,
@@ -342,7 +342,7 @@ mod tests {
     }
 
     #[test]
-    fn total_indexed_vacio_es_cero() {
+    fn total_indexed_empty_is_zero() {
         assert_eq!(ScanStats::default().total_indexed(), 0);
     }
 }

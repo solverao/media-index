@@ -9,7 +9,7 @@ pub struct Database {
 impl Database {
     pub fn open(path: &str) -> Result<Self> {
         let conn = Connection::open(path)
-            .with_context(|| format!("No se pudo abrir la BD: {path}"))?;
+            .with_context(|| format!("Could not open DB: {path}"))?;
         let db = Self { conn };
         db.init_schema()?;
         Ok(db)
@@ -21,7 +21,7 @@ impl Database {
             PRAGMA synchronous   = NORMAL;
             PRAGMA foreign_keys  = ON;
 
-            -- Tabla principal: un registro por contenido único (hash)
+            -- Main table: one record per unique content (hash)
             CREATE TABLE IF NOT EXISTS files (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
                 blake3_hash     TEXT    NOT NULL UNIQUE,
@@ -35,7 +35,7 @@ impl Database {
                 indexed_at      TEXT    NOT NULL DEFAULT (datetime('now'))
             );
 
-            -- Metadatos 3D
+            -- 3D metadata
             CREATE TABLE IF NOT EXISTS meta_3d (
                 file_id        INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
                 format         TEXT,
@@ -47,7 +47,7 @@ impl Database {
                 dim_z          REAL
             );
 
-            -- Metadatos de video
+            -- Video metadata
             CREATE TABLE IF NOT EXISTS meta_video (
                 file_id       INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
                 duration_secs REAL,
@@ -62,7 +62,7 @@ impl Database {
                 container     TEXT
             );
 
-            -- Metadatos de audio
+            -- Audio metadata
             CREATE TABLE IF NOT EXISTS meta_audio (
                 file_id        INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
                 duration_secs  REAL,
@@ -77,7 +77,7 @@ impl Database {
                 track_number   INTEGER
             );
 
-            -- Metadatos de imagen
+            -- Image metadata
             CREATE TABLE IF NOT EXISTS meta_image (
                 file_id      INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
                 width        INTEGER,
@@ -93,7 +93,7 @@ impl Database {
                 focal_length REAL
             );
 
-            -- Duplicados
+            -- Duplicates
             CREATE TABLE IF NOT EXISTS duplicates (
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
                 canonical_id   INTEGER NOT NULL REFERENCES files(id),
@@ -102,7 +102,7 @@ impl Database {
                 UNIQUE(canonical_id, duplicate_path)
             );
 
-            -- Índices
+            -- Indexes
             CREATE INDEX IF NOT EXISTS idx_files_hash      ON files(blake3_hash);
             CREATE INDEX IF NOT EXISTS idx_files_type      ON files(media_type);
             CREATE INDEX IF NOT EXISTS idx_files_name      ON files(original_name);
@@ -114,11 +114,11 @@ impl Database {
         Ok(())
     }
 
-    // ── Inserción ─────────────────────────────────────────────────────────
+    // ── Insertion ─────────────────────────────────────────────────────────
 
-    /// Retorna (file_id, es_duplicado, path_canónico_si_duplicado)
+    /// Returns (file_id, is_duplicate, canonical_path_if_duplicate)
     pub fn insert(&self, entry: &MediaEntry) -> Result<(i64, bool, Option<String>)> {
-        // ¿Ya existe por hash?
+        // Already exists by hash?
         let existing: Option<(i64, String)> = self.conn.query_row(
             "SELECT id, current_path FROM files WHERE blake3_hash = ?1",
             params![entry.blake3_hash],
@@ -126,12 +126,12 @@ impl Database {
         ).ok();
 
         if let Some((canonical_id, canonical_path)) = existing {
-            // Mismo path = re-escaneo, no es duplicado real
+            // Same path = re-scan, not a real duplicate
             if canonical_path == entry.current_path {
                 return Ok((canonical_id, false, None));
             }
 
-            // Verificar si ya estaba registrado como duplicado (re-escaneo)
+            // Check if it was already registered as a duplicate (re-scan)
             let already_known: bool = self.conn.query_row(
                 "SELECT COUNT(*) FROM duplicates WHERE canonical_id = ?1 AND duplicate_path = ?2",
                 params![canonical_id, entry.current_path],
@@ -142,15 +142,15 @@ impl Database {
                 return Ok((canonical_id, false, None));
             }
 
-            // ¿El recién llegado es más "original" que el canónico actual?
-            // Si es así, promoverlo: actualizar current_path en files y registrar
-            // el viejo canónico como duplicado en su lugar.
+            // Is the newcomer more "original" than the current canonical?
+            // If so, promote it: update current_path in files and register
+            // the old canonical as a duplicate instead.
             let incoming_score  = copy_score(&entry.current_path);
             let canonical_score = copy_score(&canonical_path);
 
             if incoming_score < canonical_score {
-                // El recién llegado parece más original — promoverlo a canónico.
-                // Actualizar current_path, original_name, source_archive y path_in_archive
+                // The newcomer looks more original — promote it to canonical.
+                // Update current_path, original_name, source_archive and path_in_archive
                 self.conn.execute(
                     "UPDATE files
                      SET current_path    = ?1,
@@ -166,7 +166,7 @@ impl Database {
                         canonical_id,
                     ],
                 )?;
-                // El viejo canónico pasa a ser duplicado
+                // The old canonical becomes a duplicate
                 self.conn.execute(
                     "INSERT OR IGNORE INTO duplicates (canonical_id, duplicate_path)
                      VALUES (?1, ?2)",
@@ -183,7 +183,7 @@ impl Database {
             return Ok((canonical_id, true, Some(canonical_path)));
         }
 
-        // Insertar en tabla principal
+        // Insert into main table
         self.conn.execute(
             "INSERT INTO files
              (blake3_hash, size_bytes, original_name, current_path, extension,
@@ -203,7 +203,7 @@ impl Database {
 
         let file_id = self.conn.last_insert_rowid();
 
-        // Insertar metadatos específicos
+        // Insert type-specific metadata
         match &entry.metadata {
             Metadata::Print3D(m) => self.insert_meta_3d(file_id, m)?,
             Metadata::Video(m)   => self.insert_meta_video(file_id, m)?,
@@ -277,16 +277,16 @@ impl Database {
         Ok(())
     }
 
-    // ── Mantenimiento ─────────────────────────────────────────────────────
+    // ── Maintenance ───────────────────────────────────────────────────────
 
-    /// Elimina entradas cuyo path ya no existe en disco, incluyendo las que
-    /// provienen de comprimidos cuyo archivo padre fue borrado manualmente.
-    /// Debe llamarse al inicio de cada escaneo para que los duplicados
-    /// borrados manualmente no persistan en la BD.
+    /// Removes entries whose path no longer exists on disk, including those
+    /// from archives whose parent file was manually deleted.
+    /// Should be called at the start of each scan so that manually deleted
+    /// duplicates do not persist in the DB.
     ///
-    /// Devuelve (archivos_canónicos_eliminados, duplicados_eliminados).
+    /// Returns (canonical_files_removed, duplicates_removed).
     pub fn cleanup_stale(&self) -> Result<(usize, usize)> {
-        // 1. Duplicados cuyo duplicate_path ya no existe
+        // 1. Duplicates whose duplicate_path no longer exists
         let dup_paths: Vec<(i64, String)> = {
             let mut stmt = self.conn.prepare(
                 "SELECT id, duplicate_path FROM duplicates"
@@ -299,7 +299,7 @@ impl Database {
         let mut dupes_removed = 0usize;
         for (id, path) in &dup_paths {
             let stale = if let Some(archive) = path.splitn(2, "::").next().filter(|_| path.contains("::")) {
-                // Entrada dentro de un comprimido: stale si el comprimido ya no existe
+                // Entry inside an archive: stale if the archive no longer exists
                 !std::path::Path::new(archive).exists()
             } else {
                 !std::path::Path::new(path).exists()
@@ -313,8 +313,8 @@ impl Database {
             }
         }
 
-        // 2. Archivos canónicos cuyo current_path ya no existe
-        // (ON DELETE CASCADE limpia duplicates + meta_* automáticamente)
+        // 2. Canonical files whose current_path no longer exists
+        // (ON DELETE CASCADE cleans up duplicates + meta_* automatically)
         let file_paths: Vec<(i64, String)> = {
             let mut stmt = self.conn.prepare(
                 "SELECT id, current_path FROM files"
@@ -327,7 +327,7 @@ impl Database {
         let mut files_removed = 0usize;
         for (id, path) in &file_paths {
             let stale = if let Some(archive) = path.splitn(2, "::").next().filter(|_| path.contains("::")) {
-                // Canónico dentro de un comprimido: stale si el comprimido ya no existe
+                // Canonical inside an archive: stale if the archive no longer exists
                 !std::path::Path::new(archive).exists()
             } else {
                 !std::path::Path::new(path).exists()
@@ -344,27 +344,27 @@ impl Database {
         Ok((files_removed, dupes_removed))
     }
 
-    /// Devuelve true si el comprimido puede borrarse de forma segura.
-    /// Condición: TODOS los archivos que contiene tienen al menos una copia
-    /// en otro lugar que no esté siendo borrado en esta misma operación.
+    /// Returns true if the archive can be safely deleted.
+    /// Condition: ALL files it contains have at least one copy
+    /// elsewhere that is not being deleted in this same operation.
     ///
-    /// No depende de la distinción canónico/duplicado — trabaja directamente
-    /// con hashes, que es la fuente de verdad real.
+    /// Does not depend on the canonical/duplicate distinction — works directly
+    /// with hashes, which are the real source of truth.
     pub fn can_safely_delete_archive(
         &self,
         archive_path:      &str,
         deleted_paths:     &std::collections::HashSet<String>,
         archives_to_del:   &std::collections::HashSet<String>,
     ) -> Result<bool> {
-        // 1. Obtener TODOS los hashes del comprimido (canónicos + duplicados)
+        // 1. Get ALL hashes from the archive (canonical + duplicates)
         let hashes: Vec<String> = {
             let mut stmt = self.conn.prepare(
-                "-- Canónicos cuya fuente es este comprimido
+                "-- Canonical files whose source is this archive
                  SELECT blake3_hash FROM files
                  WHERE source_archive = ?1
                    AND path_in_archive IS NOT NULL
                  UNION
-                 -- Duplicados cuya ruta es dentro de este comprimido
+                 -- Duplicates whose path is inside this archive
                  SELECT DISTINCT f.blake3_hash
                  FROM files f
                  JOIN duplicates d ON d.canonical_id = f.id
@@ -376,10 +376,10 @@ impl Database {
             )?.filter_map(|r| r.ok()).collect()
         };
 
-        // Si no hay ningún archivo indexado → no borrar (vacío o no escaneado)
+        // No indexed files found → do not delete (empty or not yet scanned)
         if hashes.is_empty() { return Ok(false); }
 
-        // 2. Para cada hash, verificar que existe otra copia fuera de este comprimido
+        // 2. For each hash, verify that another copy exists outside this archive
         for hash in &hashes {
             let copies: Vec<String> = {
                 let mut stmt = self.conn.prepare(
@@ -396,22 +396,22 @@ impl Database {
             };
 
             let has_surviving_copy = copies.iter().any(|copy| {
-                // Excluir copias dentro de ESTE comprimido
+                // Exclude copies inside THIS archive
                 if copy.starts_with(&format!("{archive_path}::")) || copy == archive_path {
                     return false;
                 }
-                // Excluir paths ya borrados en este run
+                // Exclude paths already deleted in this run
                 if deleted_paths.contains(copy) { return false; }
 
                 if copy.contains("::") {
-                    // Copia dentro de otro comprimido
+                    // Copy inside another archive
                     let parent = copy.splitn(2, "::").next().unwrap_or("");
-                    // Ese comprimido no debe estar siendo borrado
+                    // That archive must not be getting deleted
                     if archives_to_del.contains(parent) { return false; }
-                    // Y debe existir en disco
+                    // And it must exist on disk
                     std::path::Path::new(parent).exists()
                 } else {
-                    // Archivo suelto: debe existir en disco
+                    // Loose file: must exist on disk
                     std::path::Path::new(copy).exists()
                 }
             });
@@ -422,8 +422,8 @@ impl Database {
         Ok(true)
     }
 
-    /// Devuelve todos los archivos indexados con su hash y tamaño para verificación.
-    /// Excluye los que viven dentro de comprimidos (no se pueden re-hashear sin extraer).
+    /// Returns all indexed files with their hash and size for verification.
+    /// Excludes those living inside archives (cannot be re-hashed without extracting).
     pub fn files_for_verify(&self) -> Result<Vec<(i64, String, String, u64)>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, blake3_hash, current_path, size_bytes
@@ -437,17 +437,17 @@ impl Database {
         Ok(results)
     }
 
-    /// Elimina de la BD un archivo canónico por id (y sus duplicados en cascade).
+    /// Removes a canonical file from the DB by id (and its duplicates via cascade).
     pub fn remove_file(&self, id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM files WHERE id = ?1", rusqlite::params![id])?;
         Ok(())
     }
 
-    /// Elimina todas las entradas de basura macOS (__MACOSX/, ._*, .DS_Store)
-    /// que hayan podido indexarse antes de que existiera el filtro.
-    /// Devuelve el número de entradas eliminadas.
+    /// Removes all macOS junk entries (__MACOSX/, ._*, .DS_Store)
+    /// that may have been indexed before the filter existed.
+    /// Returns the number of entries removed.
     pub fn purge_macos_junk(&self) -> Result<usize> {
-        // Duplicados con ruta de basura macOS
+        // Duplicates with macOS junk path
         let dup_del = self.conn.execute(
             "DELETE FROM duplicates
              WHERE duplicate_path LIKE '%::__MACOSX/%'
@@ -456,7 +456,7 @@ impl Database {
             [],
         )?;
 
-        // Canónicos con ruta de basura macOS (CASCADE elimina sus duplicados y meta)
+        // Canonical files with macOS junk path (CASCADE removes their duplicates and meta)
         let file_del = self.conn.execute(
             "DELETE FROM files
              WHERE current_path LIKE '%::__MACOSX/%'
@@ -473,8 +473,8 @@ impl Database {
         Ok(dup_del + file_del)
     }
 
-    /// Devuelve todos los archivos candidatos a thumbnail (imágenes, videos y 3D),
-    /// incluyendo los que están dentro de comprimidos.
+    /// Returns all files that are thumbnail candidates (images, videos and 3D),
+    /// including those inside archives.
     pub fn files_for_thumbs(
         &self,
         media_type: Option<&str>,
@@ -499,7 +499,7 @@ impl Database {
         Ok(results)
     }
 
-    // ── Consultas ─────────────────────────────────────────────────────────
+    // ── Queries ───────────────────────────────────────────────────────────
 
     pub fn stats(&self) -> Result<DbStats> {
         let total: i64 = self.conn.query_row(
@@ -618,7 +618,7 @@ impl Database {
     }
 }
 
-// ── DTOs de resultado ─────────────────────────────────────────────────────
+// ── Result DTOs ───────────────────────────────────────────────────────────
 
 pub struct DbStats {
     pub total:    i64,
@@ -654,7 +654,7 @@ pub enum SearchDetail {
     Other,
 }
 
-// ── Helpers internos ──────────────────────────────────────────────────────
+// ── Internal helpers ──────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -682,25 +682,25 @@ mod tests {
     // ── copy_score ────────────────────────────────────────────────────────
 
     #[test]
-    fn copy_score_original_bajo() {
+    fn copy_score_original_low() {
         let s = copy_score("/fotos/vacaciones.jpg");
         assert!(s < 5_000, "score={s}");
     }
 
     #[test]
-    fn copy_score_copia_espanol() {
+    fn copy_score_copy_spanish() {
         assert!(copy_score("/fotos/foto - copia.jpg")   >= 10_000);
         assert!(copy_score("/fotos/foto - copia (2).jpg") >= 10_000);
     }
 
     #[test]
-    fn copy_score_copy_ingles() {
+    fn copy_score_copy_english() {
         assert!(copy_score("/fotos/photo - Copy.jpg")   >= 10_000);
     }
 
     #[test]
-    fn copy_score_sufijo_numerico_con_guion() {
-        // "file_1", "file_2" → sufijo numérico precedido de '_'
+    fn copy_score_numeric_suffix() {
+        // "file_1", "file_2" → numeric suffix preceded by '_'
         assert!(copy_score("/fotos/imagen_2.jpg")  >= 5_000);
         assert!(copy_score("/fotos/imagen_10.jpg") >= 5_000);
     }
@@ -712,16 +712,16 @@ mod tests {
     }
 
     #[test]
-    fn copy_score_original_gana_a_copia() {
+    fn copy_score_original_beats_copy() {
         let orig = copy_score("/fotos/vacaciones.jpg");
         let copy = copy_score("/fotos/vacaciones - copia.jpg");
         assert!(orig < copy);
     }
 
-    // ── insert: nuevo archivo ─────────────────────────────────────────────
+    // ── insert: new file ──────────────────────────────────────────────────
 
     #[test]
-    fn insert_nuevo_no_es_duplicado() {
+    fn insert_new_is_not_duplicate() {
         let db = mem_db();
         let (_, is_dup, canon) = db.insert(&entry("h1", "/a.jpg", "a.jpg")).unwrap();
         assert!(!is_dup);
@@ -729,7 +729,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_mismo_hash_distinto_path_es_duplicado() {
+    fn insert_same_hash_different_path_is_duplicate() {
         let db = mem_db();
         db.insert(&entry("h1", "/orig/a.jpg", "a.jpg")).unwrap();
         let (_, is_dup, canon) = db.insert(&entry("h1", "/copy/a.jpg", "a.jpg")).unwrap();
@@ -738,7 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn insert_rescan_mismo_path_no_es_duplicado() {
+    fn insert_rescan_same_path_not_duplicate() {
         let db = mem_db();
         db.insert(&entry("h1", "/a.jpg", "a.jpg")).unwrap();
         let (_, is_dup, _) = db.insert(&entry("h1", "/a.jpg", "a.jpg")).unwrap();
@@ -746,11 +746,11 @@ mod tests {
     }
 
     #[test]
-    fn insert_promueve_mas_original_a_canonico() {
+    fn insert_promotes_more_original_to_canonical() {
         let db = mem_db();
-        // Primero se indexa la copia
+        // The copy is indexed first
         db.insert(&entry("h1", "/fotos/foto - copia.jpg", "foto - copia.jpg")).unwrap();
-        // Luego el original — debe promoverse a canónico
+        // Then the original — should be promoted to canonical
         let (_, is_dup, _) = db.insert(&entry("h1", "/fotos/foto.jpg", "foto.jpg")).unwrap();
         assert!(!is_dup);
         let groups = db.duplicates().unwrap();
@@ -762,7 +762,7 @@ mod tests {
     // ── stats ─────────────────────────────────────────────────────────────
 
     #[test]
-    fn stats_bd_vacia() {
+    fn stats_empty_db() {
         let s = mem_db().stats().unwrap();
         assert_eq!(s.total, 0);
         assert_eq!(s.dupes, 0);
@@ -770,11 +770,11 @@ mod tests {
     }
 
     #[test]
-    fn stats_con_duplicado() {
+    fn stats_with_duplicate() {
         let db = mem_db();
         db.insert(&entry("h1", "/a.jpg", "a.jpg")).unwrap();
         db.insert(&entry("h2", "/b.jpg", "b.jpg")).unwrap();
-        db.insert(&entry("h1", "/c.jpg", "c.jpg")).unwrap(); // dup de h1
+        db.insert(&entry("h1", "/c.jpg", "c.jpg")).unwrap(); // dup of h1
         let s = db.stats().unwrap();
         assert_eq!(s.total, 2);
         assert_eq!(s.dupes, 1);
@@ -783,7 +783,7 @@ mod tests {
     // ── search ────────────────────────────────────────────────────────────
 
     #[test]
-    fn search_encuentra_por_nombre_parcial() {
+    fn search_finds_by_partial_name() {
         let db = mem_db();
         db.insert(&entry("h1", "/fotos/vacaciones.jpg", "vacaciones.jpg")).unwrap();
         let r = db.search("vacacion", None).unwrap();
@@ -792,14 +792,14 @@ mod tests {
     }
 
     #[test]
-    fn search_sin_resultados() {
+    fn search_no_results() {
         let db = mem_db();
         db.insert(&entry("h1", "/fotos/foto.jpg", "foto.jpg")).unwrap();
         assert!(db.search("xyznotfound", None).unwrap().is_empty());
     }
 
     #[test]
-    fn search_filtro_por_tipo() {
+    fn search_filter_by_type() {
         let db = mem_db();
         db.insert(&entry("h1", "/fotos/foto.jpg", "foto.jpg")).unwrap();
         assert!(db.search("foto", Some("video")).unwrap().is_empty());
@@ -807,7 +807,7 @@ mod tests {
     }
 
     #[test]
-    fn search_insensible_a_mayusculas() {
+    fn search_case_insensitive() {
         let db = mem_db();
         db.insert(&entry("h1", "/Foto.jpg", "Foto.jpg")).unwrap();
         assert_eq!(db.search("foto", None).unwrap().len(), 1);
@@ -817,12 +817,12 @@ mod tests {
     // ── duplicates ────────────────────────────────────────────────────────
 
     #[test]
-    fn duplicates_vacio() {
+    fn duplicates_empty() {
         assert!(mem_db().duplicates().unwrap().is_empty());
     }
 
     #[test]
-    fn duplicates_agrupa_correctamente() {
+    fn duplicates_groups_correctly() {
         let db = mem_db();
         db.insert(&entry("h1", "/a.jpg", "a.jpg")).unwrap();
         db.insert(&entry("h1", "/b.jpg", "b.jpg")).unwrap();
@@ -833,7 +833,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicates_dos_grupos_independientes() {
+    fn duplicates_two_independent_groups() {
         let db = mem_db();
         db.insert(&entry("h1", "/a1.jpg", "a1.jpg")).unwrap();
         db.insert(&entry("h1", "/a2.jpg", "a2.jpg")).unwrap();
@@ -845,7 +845,7 @@ mod tests {
     // ── cleanup_stale ─────────────────────────────────────────────────────
 
     #[test]
-    fn cleanup_stale_elimina_path_inexistente() {
+    fn cleanup_stale_removes_nonexistent_path() {
         let db = mem_db();
         db.insert(&entry("h1", "/ruta/que/no/existe.jpg", "inexistente.jpg")).unwrap();
         let (removed, _) = db.cleanup_stale().unwrap();
@@ -854,7 +854,7 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_stale_conserva_archivo_existente() {
+    fn cleanup_stale_keeps_existing_file() {
         let db = mem_db();
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
@@ -865,13 +865,13 @@ mod tests {
     }
 
     #[test]
-    fn cleanup_stale_elimina_duplicados_de_archivo_borrado() {
+    fn cleanup_stale_removes_orphan_duplicates() {
         let db = mem_db();
-        // Canónico que sí existe
+        // Canonical that actually exists
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let path = tmp.path().to_str().unwrap().to_string();
         db.insert(&entry("h1", &path, "real.jpg")).unwrap();
-        // Duplicado con path inexistente — cleanup_stale lo debe eliminar
+        // Duplicate with nonexistent path — cleanup_stale must remove it
         db.insert(&entry("h1", "/no/existe/copia.jpg", "copia.jpg")).unwrap();
         let (_, dupes_removed) = db.cleanup_stale().unwrap();
         assert_eq!(dupes_removed, 1);
@@ -881,7 +881,7 @@ mod tests {
     // ── purge_macos_junk ─────────────────────────────────────────────────
 
     #[test]
-    fn purge_elimina_macosx_en_path() {
+    fn purge_removes_macosx_in_path() {
         let db = mem_db();
         db.insert(&entry("h1", "/arc.zip::__MACOSX/file.jpg", "file.jpg")).unwrap();
         db.insert(&entry("h2", "/normal.jpg", "normal.jpg")).unwrap();
@@ -891,7 +891,7 @@ mod tests {
     }
 
     #[test]
-    fn purge_elimina_dot_underscore() {
+    fn purge_removes_dot_underscore() {
         let db = mem_db();
         db.insert(&entry("h1", "/arc.zip::._hidden", "._hidden")).unwrap();
         let removed = db.purge_macos_junk().unwrap();
@@ -899,7 +899,7 @@ mod tests {
     }
 
     #[test]
-    fn purge_elimina_ds_store() {
+    fn purge_removes_ds_store() {
         let db = mem_db();
         db.insert(&entry("h1", "/arc.zip::.DS_Store", ".DS_Store")).unwrap();
         let removed = db.purge_macos_junk().unwrap();
@@ -907,7 +907,7 @@ mod tests {
     }
 
     #[test]
-    fn purge_por_source_archive_y_path_in_archive() {
+    fn purge_via_source_archive_and_path_in_archive() {
         let db = mem_db();
         let mut e = entry("h1", "/arc.zip::__MACOSX/._icon", "._icon");
         e.source_archive  = Some("/arc.zip".to_string());
@@ -918,7 +918,7 @@ mod tests {
     }
 
     #[test]
-    fn purge_no_toca_archivos_normales() {
+    fn purge_does_not_touch_normal_files() {
         let db = mem_db();
         db.insert(&entry("h1", "/fotos/foto.jpg", "foto.jpg")).unwrap();
         db.insert(&entry("h2", "/arc.zip::real.jpg", "real.jpg")).unwrap();
@@ -930,7 +930,7 @@ mod tests {
     // ── files_for_verify ─────────────────────────────────────────────────
 
     #[test]
-    fn files_for_verify_excluye_entradas_de_comprimidos() {
+    fn files_for_verify_excludes_archive_entries() {
         let db = mem_db();
         db.insert(&entry("h1", "/archivo.jpg", "archivo.jpg")).unwrap();
         let mut arc = entry("h2", "/arc.zip::inner.jpg", "inner.jpg");
@@ -943,7 +943,7 @@ mod tests {
     }
 
     #[test]
-    fn files_for_verify_incluye_hash_y_size() {
+    fn files_for_verify_includes_hash_and_size() {
         let db = mem_db();
         db.insert(&entry("deadbeef", "/x.jpg", "x.jpg")).unwrap();
         let files = db.files_for_verify().unwrap();
@@ -954,10 +954,10 @@ mod tests {
     // ── remove_file ───────────────────────────────────────────────────────
 
     #[test]
-    fn remove_file_elimina_canonico_sin_duplicados() {
-        // remove_file está diseñado para usarse sobre archivos sin duplicados activos
-        // (canonical_id en duplicates no tiene ON DELETE CASCADE;
-        //  cleanup_stale borra los duplicados huérfanos antes de borrar el canónico)
+    fn remove_file_removes_canonical_without_duplicates() {
+        // remove_file is designed to be used on files with no active duplicates
+        // (canonical_id in duplicates has no ON DELETE CASCADE;
+        //  cleanup_stale deletes orphan duplicates before deleting the canonical)
         let db = mem_db();
         db.insert(&entry("h1", "/a.jpg", "a.jpg")).unwrap();
         db.insert(&entry("h2", "/b.jpg", "b.jpg")).unwrap();
@@ -969,8 +969,8 @@ mod tests {
     }
 
     #[test]
-    fn remove_file_elimina_meta_en_cascade() {
-        // Los metadatos sí tienen ON DELETE CASCADE
+    fn remove_file_removes_meta_in_cascade() {
+        // Metadata tables do have ON DELETE CASCADE
         let db = mem_db();
         let mut e = entry("h1", "/cancion.mp3", "cancion.mp3");
         e.extension  = "mp3".to_string();
@@ -987,14 +987,14 @@ mod tests {
     }
 }
 
-/// Devuelve una puntuación de "cuánto parece una copia" basada en el nombre del archivo.
-/// Menor puntuación = más original. Se usa para decidir qué path queda como canónico.
+/// Returns a "how much does this look like a copy" score based on the filename.
+/// Lower score = more original. Used to decide which path becomes the canonical.
 ///
-/// Patrones detectados (Windows/macOS/Linux en español e inglés):
+/// Detected patterns (Windows/macOS/Linux in Spanish and English):
 ///   " - copia", " - copia (2)", "- Copy", " (1)", "_copy", "backup", etc.
 ///
-/// Tiebreaker: cuando dos paths tienen el mismo score de copia, se prefiere el de
-/// nombre más largo (más descriptivo). Ej: "hellboy.rar::film" > "h.rar::film".
+/// Tiebreaker: when two paths have the same copy score, the one with the
+/// longer name (more descriptive) is preferred. E.g. "hellboy.rar::film" > "h.rar::film".
 fn copy_score(path: &str) -> u32 {
     let name = std::path::Path::new(path)
         .file_stem()
@@ -1003,10 +1003,10 @@ fn copy_score(path: &str) -> u32 {
 
     let mut score = 0u32;
 
-    // Windows español: "archivo - copia", "archivo - copia (2)"
+    // Windows Spanish: "archivo - copia", "archivo - copia (2)"
     if name.contains(" - copia") { score += 10_000; }
 
-    // Windows inglés: "file - Copy", "file - Copy (2)"
+    // Windows English: "file - Copy", "file - Copy (2)"
     if name.contains(" - copy") { score += 10_000; }
 
     // macOS / Linux: "file (1)", "file (2)", ...
@@ -1016,20 +1016,20 @@ fn copy_score(path: &str) -> u32 {
         if suffix.trim().starts_with('(') { score += 8_000; }
     }
 
-    // Sufijos numéricos: "file_1", "file_2", "file 1", "file 2"
+    // Numeric suffixes: "file_1", "file_2", "file 1", "file 2"
     if name.chars().last().map(|c| c.is_ascii_digit()).unwrap_or(false) {
         let trimmed = name.trim_end_matches(|c: char| c.is_ascii_digit());
         if trimmed.ends_with('_') || trimmed.ends_with(' ') { score += 5_000; }
     }
 
-    // Palabras clave genéricas en el nombre
+    // Generic keywords in the name
     for keyword in &["_copy", "_backup", "_bak", " backup", " bak", "copy_of", "copia_de"] {
         if name.contains(keyword) { score += 6_000; }
     }
 
-    // Tiebreaker: penalizar nombres cortos. Nombres más largos son más descriptivos
-    // y probablemente más originales (ej. "hellboy" > "h", "documento" > "doc1").
-    // La penalización es pequeña (max 255) para no superar ningún patrón de copia.
+    // Tiebreaker: penalize short names. Longer names are more descriptive
+    // and probably more original (e.g. "hellboy" > "h", "document" > "doc1").
+    // The penalty is small (max 255) so it cannot override any copy pattern.
     let name_len = name.chars().count().min(255) as u32;
     score += 255u32.saturating_sub(name_len);
 

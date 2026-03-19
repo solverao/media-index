@@ -5,24 +5,24 @@ use colored::Colorize;
 // pub const DEFAULT_SIZE:    u32 = 256;
 // pub const DEFAULT_QUALITY: u8  = 85;
 
-// Fondo oscuro
+// Dark background
 const DARK_BG: [u8; 3] = [28, 28, 32];
 
-// Cap para no bloquear con modelos enormes
+// Cap to avoid blocking on huge models
 const MAX_VERTS: usize = 150_000;
 
-// ── Rutas ─────────────────────────────────────────────────────────────────
+// ── Paths ──────────────────────────────────────────────────────────────────
 
-/// Calcula la ruta del thumbnail dado el directorio base y el hash.
-/// Usa los primeros 2 caracteres del hash como subdirectorio para no llenar
-/// un solo directorio con miles de archivos.
+/// Computes the thumbnail path given the base directory and hash.
+/// Uses the first 2 characters of the hash as a subdirectory to avoid
+/// filling a single directory with thousands of files.
 pub fn thumb_path(thumb_dir: &Path, hash: &str) -> PathBuf {
     let prefix = hash.get(..2).unwrap_or("xx");
     thumb_dir.join(prefix).join(format!("{hash}.jpg"))
 }
 
-/// Deriva el directorio de thumbnails a partir de la ruta de la BD.
-/// Ej: `/datos/media.db` → `/datos/media.thumbs/`
+/// Derives the thumbnails directory from the DB path.
+/// E.g.: `/data/media.db` → `/data/media.thumbs/`
 pub fn thumb_dir_for_db(db_path: &str) -> PathBuf {
     let p    = Path::new(db_path);
     let stem = p.file_stem()
@@ -32,9 +32,9 @@ pub fn thumb_dir_for_db(db_path: &str) -> PathBuf {
     dir.join(format!("{stem}.thumbs"))
 }
 
-// ── Generadores públicos ──────────────────────────────────────────────────
+// ── Public generators ─────────────────────────────────────────────────────
 
-/// Thumbnail de imagen desde bytes en memoria (para archivos dentro de comprimidos).
+/// Image thumbnail from in-memory bytes (for files inside archives).
 pub fn generate_image_from_bytes(
     data:      &[u8],
     hash:      &str,
@@ -48,7 +48,7 @@ pub fn generate_image_from_bytes(
     write_jpeg(&thumb.to_rgb8(), hash, thumb_dir, quality)
 }
 
-/// Thumbnail de imagen desde su ruta en disco.
+/// Image thumbnail from its path on disk.
 pub fn generate_image(
     path:      &str,
     hash:      &str,
@@ -63,8 +63,8 @@ pub fn generate_image(
     write_jpeg(&thumb.to_rgb8(), hash, thumb_dir, quality)
 }
 
-/// Corrige la orientación de la imagen según el tag EXIF Orientation.
-/// Las cámaras y móviles almacenan las fotos rotadas con la corrección en EXIF.
+/// Corrects image orientation according to the EXIF Orientation tag.
+/// Cameras and phones store photos rotated with the correction stored in EXIF.
 fn apply_exif_orientation(img: image::DynamicImage, data: &[u8]) -> image::DynamicImage {
     use exif::{Reader as ExifReader, Tag, In, Value};
 
@@ -80,7 +80,7 @@ fn apply_exif_orientation(img: image::DynamicImage, data: &[u8]) -> image::Dynam
         })
         .unwrap_or(1);
 
-    // Valores EXIF Orientation:
+    // EXIF Orientation values:
     // 1 = Normal          2 = Flip H
     // 3 = Rotate 180°     4 = Flip V
     // 5 = Transpose       6 = Rotate 90° CW
@@ -93,12 +93,12 @@ fn apply_exif_orientation(img: image::DynamicImage, data: &[u8]) -> image::Dynam
         6 => img.rotate90(),
         7 => img.rotate270().fliph(),
         8 => img.rotate270(),
-        _ => img, // 1 o desconocido: sin cambios
+        _ => img, // 1 or unknown: no change
     }
 }
 
-/// Thumbnail de video usando ffmpeg: extrae un frame cerca del inicio.
-/// Requiere que `ffmpeg` esté instalado en el PATH.
+/// Video thumbnail using ffmpeg: extracts a frame near the start.
+/// Requires `ffmpeg` to be installed in PATH.
 pub fn generate_video(
     path:      &str,
     hash:      &str,
@@ -109,7 +109,7 @@ pub fn generate_video(
     let out = thumb_path(thumb_dir, hash);
     std::fs::create_dir_all(out.parent().unwrap())?;
 
-    // vf: escala manteniendo aspecto, rellena con negro para cuadrar
+    // vf: scale maintaining aspect ratio, pad with black to square
     let vf = format!(
         "scale='if(gt(iw,ih),{size},-2)':'if(gt(iw,ih),-2,{size})',\
          pad={size}:{size}:(ow-iw)/2:(oh-ih)/2:color=black"
@@ -117,7 +117,7 @@ pub fn generate_video(
     let qscale = quality_to_qscale(quality).to_string();
     let out_str = out.to_string_lossy().to_string();
 
-    // Intentar extraer frame en segundo 5; si falla, en segundo 0
+    // Try to extract frame at second 5; if that fails, try second 0
     for seek in ["5", "0"] {
         let ok = std::process::Command::new("ffmpeg")
             .args(["-ss", seek, "-i", path,
@@ -134,13 +134,13 @@ pub fn generate_video(
         }
     }
 
-    // Limpiar archivo parcial si quedó
+    // Clean up partial file if one was left behind
     let _ = std::fs::remove_file(&out);
-    anyhow::bail!("ffmpeg no generó thumbnail para {path}")
+    anyhow::bail!("ffmpeg did not generate a thumbnail for {path}")
 }
 
-/// Thumbnail de video desde bytes en memoria (archivo dentro de comprimido).
-/// Escribe los bytes a un archivo temporal, llama a ffmpeg y lo borra.
+/// Video thumbnail from in-memory bytes (file inside an archive).
+/// Writes the bytes to a temp file, calls ffmpeg, then removes it.
 pub fn generate_video_from_archive(
     data:      &[u8],
     ext:       &str,
@@ -162,9 +162,9 @@ pub fn generate_video_from_archive(
     result
 }
 
-/// Comprueba si stl-thumb está instalado en el PATH.
+/// Checks if stl-thumb is installed in PATH.
 pub fn stl_thumb_available() -> bool {
-    // stl-thumb usa -V para version, no --version
+    // stl-thumb uses -V for version, not --version
     std::process::Command::new("stl-thumb")
         .arg("-V")
         .stdout(std::process::Stdio::null())
@@ -174,10 +174,10 @@ pub fn stl_thumb_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Thumbnail de modelo 3D.
-/// Si stl-thumb está instalado lo usa (mejor calidad con OpenGL).
-/// Si no, usa el renderer interno como fallback.
-/// Soporta STL (binario y ASCII), OBJ y 3MF.
+/// 3D model thumbnail.
+/// Uses stl-thumb if installed (better quality with OpenGL).
+/// Falls back to the internal renderer if not available.
+/// Supports STL (binary and ASCII), OBJ and 3MF.
 pub fn generate_3d(
     data:      &[u8],
     ext:       &str,
@@ -186,7 +186,7 @@ pub fn generate_3d(
     size:      u32,
     quality:   u8,
 ) -> Result<()> {
-    // stl-thumb soporta STL, OBJ y 3MF — todos los formatos que manejamos
+    // stl-thumb supports STL, OBJ and 3MF — all formats we handle
     let ext_lower = ext.to_lowercase();
     let stlthumb_supported = matches!(ext_lower.as_str(), "stl" | "obj" | "3mf");
 
@@ -202,22 +202,22 @@ pub fn generate_3d(
         match result {
             Ok(()) => return Ok(()),
             Err(e) => {
-                // Informar del fallo para que el usuario pueda diagnosticar
-                eprintln!("  {} stl-thumb falló, usando renderer interno: {e}", "⚠".yellow());
+                // Report the failure so the user can diagnose it
+                eprintln!("  {} stl-thumb failed, using internal renderer: {e}", "⚠".yellow());
             }
         }
     }
 
-    // Renderer interno: funciona sin GPU, sin dependencias externas
+    // Internal renderer: works without GPU, no external dependencies
     let (verts, tris) = parse_3d_geometry(data, ext);
     if verts.is_empty() {
-        anyhow::bail!("Sin vértices en el modelo .{ext}");
+        anyhow::bail!("No vertices in .{ext} model");
     }
     let img = render_isometric(&verts, &tris, size);
     write_jpeg(&img, hash, thumb_dir, quality)
 }
 
-/// Genera thumbnail usando stl-thumb (OpenGL, mucho mejor calidad).
+/// Generates thumbnail using stl-thumb (OpenGL, much better quality).
 fn generate_3d_stlthumb(
     model_path: &str,
     hash:       &str,
@@ -229,10 +229,10 @@ fn generate_3d_stlthumb(
     let size_str = size.to_string();
     let out_str  = out.to_string_lossy().to_string();
 
-    // Sintaxis: stl-thumb <input> <output> -s <size> --recalc-normals
-    // --recalc-normals: recalcula normales para modelos con winding inconsistente
-    // LIBGL_ALWAYS_SOFTWARE=1 permite que stl-thumb funcione en entornos sin
-    // GPU fisica (WSL2, servidores headless) usando el renderer de software de Mesa.
+    // Syntax: stl-thumb <input> <output> -s <size> --recalc-normals
+    // --recalc-normals: recomputes normals for models with inconsistent winding
+    // LIBGL_ALWAYS_SOFTWARE=1 lets stl-thumb run in environments without a
+    // physical GPU (WSL2, headless servers) using Mesa's software renderer.
     let result = std::process::Command::new("stl-thumb")
         .env("LIBGL_ALWAYS_SOFTWARE", "1")
         .args([model_path, &out_str, "-s", &size_str])
@@ -244,7 +244,7 @@ fn generate_3d_stlthumb(
             let stderr = String::from_utf8_lossy(&o.stderr);
             anyhow::bail!("stl-thumb exit {}: {}", o.status, stderr.trim())
         }
-        Err(e) => anyhow::bail!("stl-thumb no pudo ejecutarse: {e}"),
+        Err(e) => anyhow::bail!("stl-thumb could not be executed: {e}"),
     }
 
     if out.exists() && out.metadata().map(|m| m.len()).unwrap_or(0) > 100 {
@@ -252,26 +252,26 @@ fn generate_3d_stlthumb(
     }
 
     let _ = std::fs::remove_file(&out);
-    anyhow::bail!("stl-thumb no generó output para {model_path}")
+    anyhow::bail!("stl-thumb did not generate output for {model_path}")
 }
 
-// ── Renderizador isométrico ───────────────────────────────────────────────
+// ── Isometric renderer ────────────────────────────────────────────────────
 
-// Color base del modelo y luz
-const MODEL_COLOR: [f32; 3] = [0.60, 0.78, 0.95]; // azul claro
-const LIGHT_DIR:   [f32; 3] = [0.57, 0.57, 0.57];  // luz diagonal ~(1,1,1) normalizada
-const AMBIENT:     f32      = 0.35;                  // ambiente más alto = menos zonas negras
+// Model base color and light
+const MODEL_COLOR: [f32; 3] = [0.60, 0.78, 0.95]; // light blue
+const LIGHT_DIR:   [f32; 3] = [0.57, 0.57, 0.57];  // diagonal light ~(1,1,1) normalized
+const AMBIENT:     f32      = 0.35;                  // higher ambient = fewer black areas
 
 fn render_isometric(
     verts: &[[f32; 3]],
     tris:  &[[usize; 3]],
     size:  u32,
 ) -> image::RgbImage {
-    // Renderizar a 2x y reducir (supersampling 4x) para eliminar gaps sub-pixel
+    // Render at 2x and downsample (4x supersampling) to eliminate sub-pixel gaps
     let render_size = size * 2;
 
-    // 1. Normalizar por percentil (P1–P99) para ignorar vértices outlier.
-    // Min/max absoluto hace que un solo vértice lejano encoja todo el modelo.
+    // 1. Normalize by percentile (P1–P99) to ignore outlier vertices.
+    // Absolute min/max makes a single distant vertex shrink the whole model.
     let mut xs: Vec<f32> = verts.iter().map(|v| v[0]).collect();
     let mut ys: Vec<f32> = verts.iter().map(|v| v[1]).collect();
     let mut zs: Vec<f32> = verts.iter().map(|v| v[2]).collect();
@@ -294,7 +294,7 @@ fn render_isometric(
         (v[2] - center[2]) / range * 1.8,
     ]).collect();
 
-    // 2. Proyección isométrica (azimut 45°, elevación 35°)
+    // 2. Isometric projection (azimuth 45°, elevation 35°)
     let az = 45_f32.to_radians();
     let el = 35_f32.to_radians();
 
@@ -308,7 +308,7 @@ fn render_isometric(
         [fx, fy, fz]
     }).collect();
 
-    // 3. Proyección 2D al buffer de alta resolución
+    // 3. 2D projection into the high-resolution buffer
     let half  = render_size as f32 / 2.0;
     let scale = half * 0.88;
     let to_px = |p: &[f32; 3]| -> (i32, i32) {
@@ -316,7 +316,7 @@ fn render_isometric(
          (half - p[1] * scale).round() as i32)
     };
 
-    // 4. Calcular triángulos
+    // 4. Compute triangles
     struct TriData { px: [(i32,i32); 3], depth: f32, color: [u8; 3] }
     let mut tri_data: Vec<TriData> = Vec::with_capacity(tris.len());
 
@@ -344,7 +344,7 @@ fn render_isometric(
         tri_data.push(TriData { px: [to_px(&va), to_px(&vb), to_px(&vc)], depth, color });
     }
 
-    // 5. Z-buffer en resolución 2x
+    // 5. Z-buffer at 2x resolution
     let sz = (render_size * render_size) as usize;
     let mut zbuf   = vec![f32::NEG_INFINITY; sz];
     let mut pixels: Vec<[u8; 3]> = vec![DARK_BG; sz];
@@ -354,7 +354,7 @@ fn render_isometric(
             tri.px[0], tri.px[1], tri.px[2], tri.depth, tri.color);
     }
 
-    // 6. Downsample 2x→1x promediando bloques 2×2 (anti-aliasing)
+    // 6. Downsample 2x→1x by averaging 2×2 blocks (anti-aliasing)
     let mut img = image::RgbImage::new(size, size);
     for y in 0..size {
         for x in 0..size {
@@ -372,8 +372,8 @@ fn render_isometric(
     img
 }
 
-/// Rellena un triángulo con z-buffer: solo pinta un píxel si está más cerca
-/// que lo que ya había. Interpola la profundidad linealmente.
+/// Fills a triangle with z-buffer: only paints a pixel if it is closer
+/// than what was already there. Linearly interpolates depth.
 fn fill_triangle_zbuf(
     zbuf:   &mut Vec<f32>,
     pixels: &mut Vec<[u8; 3]>,
@@ -385,7 +385,7 @@ fn fill_triangle_zbuf(
     let w = size as i32;
     let h = size as i32;
 
-    // Ordenar vértices por Y ascendente
+    // Sort vertices by ascending Y
     let mut pts = [(p0.0, p0.1), (p1.0, p1.1), (p2.0, p2.1)];
     pts.sort_unstable_by_key(|p| p.1);
     let [(x0,y0), (x1,y1), (x2,y2)] = pts;
@@ -414,9 +414,9 @@ fn fill_triangle_zbuf(
     }
 }
 
-// ── Parsers de geometría 3D ───────────────────────────────────────────────
+// ── 3D geometry parsers ───────────────────────────────────────────────────
 
-/// Retorna (vértices, triángulos-como-índices).
+/// Returns (vertices, triangles-as-indices).
 fn parse_3d_geometry(data: &[u8], ext: &str) -> (Vec<[f32; 3]>, Vec<[usize; 3]>) {
     match ext.to_lowercase().as_str() {
         "stl" => parse_stl(data),
@@ -463,7 +463,7 @@ fn parse_stl_ascii(data: &[u8]) -> (Vec<[f32; 3]>, Vec<[usize; 3]>) {
     let text = match std::str::from_utf8(data) { Ok(t) => t, Err(_) => return (vec![], vec![]) };
     let mut verts = vec![];
     let mut tris  = vec![];
-    let mut buf   = 0usize;  // vértices acumulados en el triángulo actual
+    let mut buf   = 0usize;  // vertices accumulated in the current triangle
 
     for line in text.lines() {
         let parts: Vec<&str> = line.split_whitespace().collect();
@@ -500,13 +500,13 @@ fn parse_obj(data: &[u8]) -> (Vec<[f32; 3]>, Vec<[usize; 3]>) {
                 if c.len() >= 3 { verts.push([c[0], c[1], c[2]]); }
             }
             Some("f") => {
-                // Índices 1-based, pueden venir como "1/2/3" o "1//3" o solo "1"
+                // 1-based indices, may come as "1/2/3" or "1//3" or just "1"
                 let idx: Vec<usize> = parts
                     .filter_map(|p| p.split('/').next()?.parse::<usize>().ok())
                     .filter(|&i| i > 0)
                     .map(|i| i - 1)
                     .collect();
-                // Fan-triangulation para n-gons
+                // Fan-triangulation for n-gons
                 for i in 1..idx.len().saturating_sub(1) {
                     tris.push([idx[0], idx[i], idx[i+1]]);
                 }
@@ -580,7 +580,7 @@ fn parse_3mf(data: &[u8]) -> (Vec<[f32; 3]>, Vec<[usize; 3]>) {
     (verts, tris)
 }
 
-// ── Escritura JPEG ────────────────────────────────────────────────────────
+// ── JPEG writer ───────────────────────────────────────────────────────────
 
 fn write_jpeg(img: &image::RgbImage, hash: &str, thumb_dir: &Path, quality: u8) -> Result<()> {
     use image::codecs::jpeg::JpegEncoder;
@@ -592,7 +592,7 @@ fn write_jpeg(img: &image::RgbImage, hash: &str, thumb_dir: &Path, quality: u8) 
     Ok(())
 }
 
-/// Convierte calidad 1–100 al qscale de ffmpeg (2=mejor, 31=peor)
+/// Converts quality 1–100 to ffmpeg qscale (2=best, 31=worst)
 fn quality_to_qscale(quality: u8) -> u8 {
     let q = quality.clamp(1, 100) as f32;
     (2.0 + (100.0 - q) / 100.0 * 29.0).round() as u8

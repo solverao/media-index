@@ -1,16 +1,16 @@
 use std::process::Command;
 use crate::models::MetaVideo;
 
-/// Extrae metadatos de video usando `ffprobe` (parte de FFmpeg).
+/// Extracts video metadata using `ffprobe` (part of FFmpeg).
 ///
-/// ffprobe es el estándar de facto y soporta todos los contenedores:
+/// ffprobe is the de-facto standard and supports all containers:
 /// MKV, MP4, AVI, MOV, WebM, TS, MTS, VOB, etc.
 ///
-/// Si ffprobe no está disponible, retorna MetaVideo::default() sin error fatal.
+/// If ffprobe is not available, returns MetaVideo::default() without a fatal error.
 pub fn parse_from_path(path: &str) -> MetaVideo {
     let mut meta = MetaVideo::default();
 
-    // Verificar disponibilidad de ffprobe (caché implícita por el OS)
+    // Check ffprobe availability (OS-level implicit cache)
     let output = Command::new("ffprobe")
         .args([
             "-v", "quiet",
@@ -23,9 +23,9 @@ pub fn parse_from_path(path: &str) -> MetaVideo {
 
     let output = match output {
         Ok(o) if o.status.success() => o,
-        Ok(_) => return meta,  // ffprobe falló (archivo corrupto, etc.)
+        Ok(_) => return meta,  // ffprobe failed (corrupt file, etc.)
         Err(_) => {
-            // ffprobe no instalado — continuar sin metadatos de video
+            // ffprobe not installed — continue without video metadata
             return meta;
         }
     };
@@ -35,7 +35,7 @@ pub fn parse_from_path(path: &str) -> MetaVideo {
         Err(_) => return meta,
     };
 
-    // ── Format (info del contenedor) ──────────────────────────────────────
+    // ── Format (container info) ───────────────────────────────────────────
     if let Some(fmt) = json.get("format") {
         meta.duration_secs = fmt["duration"]
             .as_str()
@@ -50,7 +50,7 @@ pub fn parse_from_path(path: &str) -> MetaVideo {
             .as_str()
             .map(|s| s.split(',').next().unwrap_or(s).to_string());
 
-        // Tags del contenedor (título, año…)
+        // Container tags (title, year…)
         if let Some(tags) = fmt.get("tags") {
             meta.title = tags["title"].as_str()
                 .or_else(|| tags["TITLE"].as_str())
@@ -74,7 +74,7 @@ pub fn parse_from_path(path: &str) -> MetaVideo {
                     meta.height     = stream["height"].as_u64().map(|v| v as u32);
                     meta.codec_video = stream["codec_name"].as_str().map(str::to_string);
 
-                    // FPS: viene como fracción "24000/1001" o "30/1"
+                    // FPS: comes as a fraction "24000/1001" or "30/1"
                     meta.fps = stream["r_frame_rate"]
                         .as_str()
                         .and_then(parse_fraction);
@@ -90,7 +90,7 @@ pub fn parse_from_path(path: &str) -> MetaVideo {
     meta
 }
 
-/// Parsea fracciones tipo "24000/1001" → 23.976
+/// Parses fractions like "24000/1001" → 23.976
 fn parse_fraction(s: &str) -> Option<f64> {
     let mut parts = s.splitn(2, '/');
     let num: f64 = parts.next()?.parse().ok()?;
@@ -99,7 +99,7 @@ fn parse_fraction(s: &str) -> Option<f64> {
     Some(num / den)
 }
 
-/// Verifica si ffprobe está disponible en el PATH
+/// Checks if ffprobe is available in PATH
 pub fn ffprobe_available() -> bool {
     Command::new("ffprobe")
         .arg("-version")

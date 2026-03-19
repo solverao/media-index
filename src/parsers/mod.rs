@@ -5,7 +5,7 @@ pub mod print3d;
 
 use crate::models::{Metadata, MediaType};
 
-/// Elige el parser según el tipo de medio y la extensión
+/// Picks the appropriate parser based on the media type and file extension
 pub fn parse(data: &[u8], ext: &str, media_type: &MediaType, path: &str) -> Metadata {
     match media_type {
         MediaType::Print3D => Metadata::Print3D(print3d::parse(data, ext)),

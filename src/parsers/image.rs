@@ -3,8 +3,8 @@ use crate::models::MetaImage;
 pub fn parse(data: &[u8]) -> MetaImage {
     let mut meta = MetaImage::default();
 
-    // ── Dimensiones ───────────────────────────────────────────────────────
-    // image::io::Reader está deprecado desde image 0.25 → usar ImageReader
+    // ── Dimensions ────────────────────────────────────────────────────────
+    // image::io::Reader is deprecated since image 0.25 → use ImageReader
     if let Ok(reader) = image::ImageReader::new(std::io::Cursor::new(data))
         .with_guessed_format()
     {
@@ -15,7 +15,7 @@ pub fn parse(data: &[u8]) -> MetaImage {
     }
 
     // ── EXIF ──────────────────────────────────────────────────────────────
-    // La crate se llama `kamadak-exif` en crates.io pero su lib name es `exif`
+    // The crate is called `kamadak-exif` on crates.io but its lib name is `exif`
     parse_exif(data, &mut meta);
 
     meta
@@ -28,10 +28,10 @@ fn parse_exif(data: &[u8], meta: &mut MetaImage) {
         .read_from_container(&mut std::io::Cursor::new(data))
     {
         Ok(e)  => e,
-        Err(_) => return, // Sin EXIF — normal en PNG, WebP, etc.
+        Err(_) => return, // No EXIF — normal for PNG, WebP, etc.
     };
 
-    // Helper: obtener string ASCII de un tag EXIF
+    // Helper: get ASCII string from an EXIF tag
     let get_str = |tag: Tag| -> Option<String> {
         exif.get_field(tag, In::PRIMARY)
             .and_then(|f| match &f.value {
@@ -42,7 +42,7 @@ fn parse_exif(data: &[u8], meta: &mut MetaImage) {
             .filter(|s: &String| !s.is_empty())
     };
 
-    // Helper: obtener u32
+    // Helper: get u32
     let get_u32 = |tag: Tag| -> Option<u32> {
         exif.get_field(tag, In::PRIMARY)
             .and_then(|f| match &f.value {
@@ -53,7 +53,7 @@ fn parse_exif(data: &[u8], meta: &mut MetaImage) {
             })
     };
 
-    // Helper: obtener f64 desde Rational o SRational
+    // Helper: get f64 from Rational or SRational
     let get_f64 = |tag: Tag| -> Option<f64> {
         exif.get_field(tag, In::PRIMARY)
             .and_then(|f| match &f.value {
@@ -104,7 +104,7 @@ fn parse_gps(exif: &exif::Exif, tag_dms: exif::Tag, tag_ref: exif::Tag) -> Optio
     Some(decimal)
 }
 
-// Funciones libres en vez de trait impl (más simples, evitan ambigüedades)
+// Free functions instead of trait impl (simpler, avoids ambiguities)
 fn rational_f64(r: &exif::Rational) -> f64 {
     if r.denom == 0 { 0.0 } else { r.num as f64 / r.denom as f64 }
 }

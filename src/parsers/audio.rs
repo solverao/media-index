@@ -7,8 +7,8 @@ pub fn parse(data: &[u8], _ext: &str) -> MetaAudio {
     let mut meta = MetaAudio::default();
     let cursor = std::io::Cursor::new(data);
 
-    // guess_file_type() y read() tienen tipos de error distintos,
-    // no se pueden encadenar con and_then directamente.
+    // guess_file_type() and read() have different error types,
+    // so they cannot be chained with and_then directly.
     let probe = match Probe::new(cursor)
         .options(lofty::config::ParseOptions::new().read_properties(true))
         .guess_file_type()
@@ -22,7 +22,7 @@ pub fn parse(data: &[u8], _ext: &str) -> MetaAudio {
         Err(_) => return meta,
     };
 
-    // ── Propiedades técnicas ──────────────────────────────────────────────
+    // ── Technical properties ──────────────────────────────────────────────
     let props = tagged_file.properties();
     meta.duration_secs  = Some(props.duration().as_secs_f64());
     meta.bitrate_kbps   = props.audio_bitrate();
