@@ -21,11 +21,12 @@ const PARTIAL_CHUNK_SIZE:     u64 = 4  * 1024 * 1024;  //   4 MB per side
 pub struct Scanner {
     db:      Arc<Mutex<Database>>,
     verbose: bool,
+    no_archives: bool,
 }
 
 impl Scanner {
-    pub fn new(db: Database, verbose: bool) -> Self {
-        Self { db: Arc::new(Mutex::new(db)), verbose }
+    pub fn new(db: Database, verbose: bool, no_archives: bool) -> Self {
+        Self { db: Arc::new(Mutex::new(db)), verbose, no_archives }
     }
 
     pub fn scan(&self, root: &Path) -> Result<ScanStats> {
@@ -118,43 +119,45 @@ impl Scanner {
             // ── Archive ────────────────────────────────────────────────────
             let is_archive = ArchiveType::from_path(path).is_some();
 
-            if let Some(archive_type) = ArchiveType::from_path(path) {
-                // Skip extra parts of multi-part archives
-                if archive_type == ArchiveType::Rar && is_rar_multipart(&name_lower) {
-                    let is_first = name_lower.contains(".part1.") || name_lower.contains(".part01.");
-                    if !is_first { pb.inc(1); return; }
-                }
-                if archive_type == ArchiveType::SevenZip && is_7z_multipart(&name_lower) {
-                    if !name_lower.ends_with(".001") { pb.inc(1); return; }
-                }
-
-                // Heavy work WITHOUT lock: extract + build entries
-                match extract_media_files(path, &archive_type) {
-                    Ok(files) => {
-                        let built: Vec<MediaEntry> = files.into_iter()
-                            .map(|extracted| {
-                                let mt = MediaType::from_extension(&extracted.ext)
-                                    .unwrap_or(MediaType::Other);
-                                build_entry_from_memory(
-                                    &extracted.data, &extracted.name,
-                                    &extracted.ext, &mt,
-                                    path.to_string_lossy().as_ref(),
-                                )
-                            })
-                            .collect();
-
-                        // Brief lock: insert the whole batch
-                        let mut s = stats.lock().unwrap();
-                        s.archives_opened += 1;
-                        for entry in built {
-                            self.insert_entry(entry, &mut s);
-                        }
+            if !self.no_archives {
+                if let Some(archive_type) = ArchiveType::from_path(path) {
+                    // Skip extra parts of multi-part archives
+                    if archive_type == ArchiveType::Rar && is_rar_multipart(&name_lower) {
+                        let is_first = name_lower.contains(".part1.") || name_lower.contains(".part01.");
+                        if !is_first { pb.inc(1); return; }
                     }
-                    Err(e) => {
-                        let mut s = stats.lock().unwrap();
-                        s.errors += 1;
-                        if self.verbose {
-                            eprintln!("  {} {}: {e}", "✗".red(), path.display());
+                    if archive_type == ArchiveType::SevenZip && is_7z_multipart(&name_lower) {
+                        if !name_lower.ends_with(".001") { pb.inc(1); return; }
+                    }
+
+                    // Heavy work WITHOUT lock: extract + build entries
+                    match extract_media_files(path, &archive_type) {
+                        Ok(files) => {
+                            let built: Vec<MediaEntry> = files.into_iter()
+                                .map(|extracted| {
+                                    let mt = MediaType::from_extension(&extracted.ext)
+                                        .unwrap_or(MediaType::Other);
+                                    build_entry_from_memory(
+                                        &extracted.data, &extracted.name,
+                                        &extracted.ext, &mt,
+                                        path.to_string_lossy().as_ref(),
+                                    )
+                                })
+                                .collect();
+
+                            // Brief lock: insert the whole batch
+                            let mut s = stats.lock().unwrap();
+                            s.archives_opened += 1;
+                            for entry in built {
+                                self.insert_entry(entry, &mut s);
+                            }
+                        }
+                        Err(e) => {
+                            let mut s = stats.lock().unwrap();
+                            s.errors += 1;
+                            if self.verbose {
+                                eprintln!("  {} {}: {e}", "✗".red(), path.display());
+                            }
                         }
                     }
                 }
@@ -162,7 +165,8 @@ impl Scanner {
 
             // ── Any other file (unknown extension) ─────────────────────────
             // Indexed the same way: hash + size + path. No specific metadata.
-            if !is_archive {
+            // With --no-archives, compressed files are also included here (the compressed file itself is hashed, without unpacking its contents).
+            if !is_archive || self.no_archives {
                 match self.build_entry(path, &ext, &MediaType::Other) {
                     Ok(entry) => {
                         let mut s = stats.lock().unwrap();
@@ -276,44 +280,47 @@ impl Scanner {
     /// Used by the watcher to process individual events without re-scanning everything.
     pub fn index_single(&self, path: &Path, ext: &str) {
         // Archive files: extract and process their contents
-        if let Some(archive_type) = ArchiveType::from_path(path) {
-            let name_lower = path.file_name()
-                .map(|n| n.to_string_lossy().to_lowercase())
-                .unwrap_or_default();
+        // (only if --no-archives was not specified)
+        if !self.no_archives {
+            if let Some(archive_type) = ArchiveType::from_path(path) {
+                let name_lower = path.file_name()
+                    .map(|n| n.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
 
-            // Ignore extra parts of multi-part archives
-            if archive_type == ArchiveType::Rar && is_rar_multipart(&name_lower) {
-                if !name_lower.contains(".part1.") && !name_lower.contains(".part01.") { return; }
-            }
-            if archive_type == ArchiveType::SevenZip && is_7z_multipart(&name_lower) {
-                if !name_lower.ends_with(".001") { return; }
-            }
+                // Ignore extra parts of multi-part archives
+                if archive_type == ArchiveType::Rar && is_rar_multipart(&name_lower) {
+                    if !name_lower.contains(".part1.") && !name_lower.contains(".part01.") { return; }
+                }
+                if archive_type == ArchiveType::SevenZip && is_7z_multipart(&name_lower) {
+                    if !name_lower.ends_with(".001") { return; }
+                }
 
-            match extract_media_files(path, &archive_type) {
-                Ok(files) => {
-                    let built: Vec<MediaEntry> = files.into_iter()
-                        .map(|extracted| {
-                            let mt = MediaType::from_extension(&extracted.ext)
-                                .unwrap_or(MediaType::Other);
-                            build_entry_from_memory(
-                                &extracted.data, &extracted.name,
-                                &extracted.ext, &mt,
-                                path.to_string_lossy().as_ref(),
-                            )
-                        })
-                        .collect();
+                match extract_media_files(path, &archive_type) {
+                    Ok(files) => {
+                        let built: Vec<MediaEntry> = files.into_iter()
+                            .map(|extracted| {
+                                let mt = MediaType::from_extension(&extracted.ext)
+                                    .unwrap_or(MediaType::Other);
+                                build_entry_from_memory(
+                                    &extracted.data, &extracted.name,
+                                    &extracted.ext, &mt,
+                                    path.to_string_lossy().as_ref(),
+                                )
+                            })
+                            .collect();
 
-                    let mut dummy = ScanStats::default();
-                    for entry in built {
-                        self.insert_entry(entry, &mut dummy);
+                        let mut dummy = ScanStats::default();
+                        for entry in built {
+                            self.insert_entry(entry, &mut dummy);
+                        }
                     }
+                    Err(e) if self.verbose => {
+                        eprintln!("  {} {}: {e}", "✗".red(), path.display());
+                    }
+                    _ => {}
                 }
-                Err(e) if self.verbose => {
-                    eprintln!("  {} {}: {e}", "✗".red(), path.display());
-                }
-                _ => {}
+                return;
             }
-            return;
         }
 
         // Regular file: build entry and insert

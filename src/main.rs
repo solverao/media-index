@@ -39,6 +39,10 @@ enum Commands {
         path: PathBuf,
         #[arg(short, long)]
         verbose: bool,
+        /// No abrir comprimidos (.zip, .rar, .7z): indexa solo archivos sueltos.
+        /// Los comprimidos se registran como archivos normales (se hashea el archivo en sí).
+        #[arg(long)]
+        no_archives: bool,
     },
 
     /// Watch a directory and index changes in real time
@@ -49,6 +53,9 @@ enum Commands {
         /// Seconds to wait before processing an event (default: 2)
         #[arg(short, long, default_value = "2")]
         debounce: u64,
+        /// No abrir comprimidos (.zip, .rar, .7z): indexa solo archivos sueltos.
+        #[arg(long)]
+        no_archives: bool,
     },
 
     /// General collection statistics
@@ -163,8 +170,8 @@ fn main() -> Result<()> {
     let db = Database::open(&cli.db)?;
 
     match cli.command {
-        Commands::Scan { path, verbose }  => cmd_scan(db, &path, verbose),
-        Commands::Watch { path, verbose, debounce } => cmd_watch(db, &path, verbose, debounce),
+        Commands::Scan { path, verbose, no_archives }  => cmd_scan(db, &path, verbose, no_archives),
+        Commands::Watch { path, verbose, debounce, no_archives } => cmd_watch(db, &path, verbose, debounce, no_archives),
         Commands::Stats                   => cmd_stats(db),
         Commands::Dupes { r#type, json, delete, dry_run, aggressive, prefer_archive } => cmd_dupes(db, r#type, json, delete, dry_run, aggressive, prefer_archive),
         Commands::Search { query, r#type } => cmd_search(db, &query, r#type),
@@ -179,7 +186,7 @@ fn main() -> Result<()> {
 
 // ── Commands ──────────────────────────────────────────────────────────────
 
-fn cmd_scan(db: Database, path: &std::path::Path, verbose: bool) -> Result<()> {
+fn cmd_scan(db: Database, path: &std::path::Path, verbose: bool, no_archives: bool) -> Result<()> {
     if !path.exists() {
         anyhow::bail!("Directory does not exist: {}", path.display());
     }
@@ -190,9 +197,13 @@ fn cmd_scan(db: Database, path: &std::path::Path, verbose: bool) -> Result<()> {
         println!("  Install: sudo apt install ffmpeg  /  brew install ffmpeg\n");
     }
 
+    if no_archives {
+        println!("{}", "  [--no-archives] The compressed files will be indexed as regular files, without opening their contents.".dimmed());
+    }
+
     println!("{}", format!("Scanning: {}", path.display()).bold().cyan());
 
-    let scanner = Scanner::new(db, verbose);
+    let scanner = Scanner::new(db, verbose, no_archives);
     let s       = scanner.scan(path)?;
 
     println!("\n{}", "─── Result ───────────────────────────────────".dimmed());
@@ -223,7 +234,7 @@ fn cmd_scan(db: Database, path: &std::path::Path, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_watch(db: Database, path: &std::path::Path, verbose: bool, debounce_secs: u64) -> Result<()> {
+fn cmd_watch(db: Database, path: &std::path::Path, verbose: bool, debounce_secs: u64, no_archives: bool) -> Result<()> {
     use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode, DebouncedEventKind};
     use std::time::Duration;
 
@@ -238,7 +249,7 @@ fn cmd_watch(db: Database, path: &std::path::Path, verbose: bool, debounce_secs:
 
     // Initial full scan
     println!("{}", format!("Initial scan: {}", path.display()).bold().cyan());
-    let scanner = Scanner::new(db, verbose);
+    let scanner = Scanner::new(db, verbose, no_archives);
     let s = scanner.scan(path)?;
     println!("  {} indexados  {} duplicados\n",
         s.total_indexed().to_string().cyan().bold(),

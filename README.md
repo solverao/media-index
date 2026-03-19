@@ -71,6 +71,9 @@ media-index search "vacation"
 # Vigilar cambios en tiempo real
 media-index watch ./mis-fotos
 
+# Escanear sin abrir comprimidos
+media-index scan ./mis-fotos --no-archives
+
 # Verificar integridad de archivos indexados
 media-index verify
 
@@ -95,13 +98,14 @@ media-index -d /ruta/coleccion.db <comando>
 Indexa recursivamente todos los archivos de un directorio, incluyendo el contenido de comprimidos. Al inicio de cada escaneo limpia automáticamente las entradas de la BD cuyos archivos ya no existen en disco.
 
 ```bash
-media-index scan <PATH> [--verbose]
+media-index scan <PATH> [--verbose] [--no-archives]
 ```
 
 | Argumento | Descripción |
 |-----------|-------------|
 | `PATH` | Directorio a escanear (obligatorio) |
 | `-v, --verbose` | Mostrar cada archivo procesado y los duplicados encontrados |
+| `--no-archives` | No abrir comprimidos: los `.zip`, `.rar` y `.7z` se indexan como archivos normales (se hashea el archivo en sí, no su contenido) |
 
 **Ejemplo:**
 
@@ -141,7 +145,7 @@ Escaneando: /home/usuario/Pictures
 Realiza un escaneo inicial completo y luego se queda vigilando el directorio. Cuando se crea, modifica o borra un archivo, lo procesa automáticamente sin re-escanear todo.
 
 ```bash
-media-index watch <PATH> [--verbose] [--debounce <SEGUNDOS>]
+media-index watch <PATH> [--verbose] [--debounce <SEGUNDOS>] [--no-archives]
 ```
 
 | Argumento | Descripción |
@@ -149,6 +153,7 @@ media-index watch <PATH> [--verbose] [--debounce <SEGUNDOS>]
 | `PATH` | Directorio a vigilar (obligatorio) |
 | `-v, --verbose` | Mostrar detalles de cada archivo procesado |
 | `-d, --debounce` | Segundos de espera antes de procesar un evento (default: `2`) |
+| `--no-archives` | No abrir comprimidos: los `.zip`, `.rar` y `.7z` se indexan como archivos normales |
 
 El debounce agrupa eventos del OS que ocurren en ráfaga (como copiar una carpeta entera) para procesarlos de una sola vez.
 
