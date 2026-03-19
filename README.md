@@ -59,6 +59,9 @@ media-index stats
 # Ver duplicados
 media-index dupes
 
+# Simular borrado de duplicados (sin tocar nada)
+media-index dupes --delete --dry-run
+
 # Generar thumbnails
 media-index thumbs
 
@@ -67,6 +70,12 @@ media-index search "vacation"
 
 # Vigilar cambios en tiempo real
 media-index watch ./mis-fotos
+
+# Verificar integridad de archivos indexados
+media-index verify
+
+# Limpiar basura macOS de la BD
+media-index clean --macos-junk
 ```
 
 ---
@@ -118,7 +127,12 @@ Escaneando: /home/usuario/Pictures
   23 duplicados (1.2 GB)
   ──────────────────────────────────────
   1842 indexados en total
+
+  ⚠ 3 archivo(s) grandes hasheados parcialmente (>100 MB) — deduplicación aproximada
+    Usa verify para detectar falsos positivos.
 ```
+
+> Si hay archivos grandes (> 100 MB), el escaneo usa hash parcial para mayor velocidad. El aviso al final sugiere ejecutar `verify` si necesitas confirmación exacta.
 
 ---
 
@@ -175,7 +189,7 @@ media-index stats
 ### `dupes` — Listar y borrar duplicados
 
 ```bash
-media-index dupes [--tipo <TIPO>] [--json] [--delete] [--aggressive] [--prefer-archive]
+media-index dupes [--tipo <TIPO>] [--json] [--delete] [--dry-run] [--aggressive] [--prefer-archive]
 ```
 
 | Argumento | Descripción |
@@ -183,6 +197,7 @@ media-index dupes [--tipo <TIPO>] [--json] [--delete] [--aggressive] [--prefer-a
 | `-t, --tipo` | Filtrar: `td`, `video`, `audio`, `imagen`, `otro` |
 | `-j, --json` | Salida en formato JSON |
 | `-d, --delete` | Borrar duplicados sueltos en disco |
+| `--dry-run` | Simular el borrado sin modificar nada en disco |
 | `-a, --aggressive` | Con `--delete`: borrar el comprimido entero si **todo** su contenido son duplicados |
 | `-p, --prefer-archive` | Con `--delete`: borrar el archivo suelto si ya existe dentro de un comprimido |
 
@@ -207,6 +222,21 @@ media-index dupes --json
 ```
 
 `↳` = duplicado suelto en disco. `⊡` = duplicado dentro de un comprimido.
+
+#### Simular borrado (`--dry-run`)
+
+Muestra qué se borraría sin tocar ningún archivo. Útil para revisar el plan antes de ejecutar.
+
+```bash
+media-index dupes --delete --dry-run
+media-index dupes --delete --aggressive --prefer-archive --dry-run
+```
+
+La salida indica cuántos archivos y cuántos bytes se liberarían, y termina con:
+
+```
+[DRY-RUN] no se borró nada — ejecuta sin --dry-run para aplicar
+```
 
 #### Borrar duplicados (`--delete`)
 
@@ -391,6 +421,69 @@ media-index clear --force && media-index scan ./fotos
 
 ---
 
+### `verify` — Verificar integridad de archivos indexados
+
+Re-hashea todos los archivos canónicos para detectar modificaciones, corrupciones o archivos faltantes. Compara el hash almacenado contra el estado actual en disco.
+
+```bash
+media-index verify [--prune] [--quiet]
+```
+
+| Argumento | Descripción |
+|-----------|-------------|
+| `--prune` | Eliminar de la BD las entradas con archivos faltantes o modificados |
+| `-q, --quiet` | Mostrar solo los archivos con problemas (omitir los OK) |
+
+Para cada archivo puede reportar:
+
+- `✓ OK` — el hash coincide, el archivo está intacto
+- `✗ FALTANTE` — el archivo ya no existe en disco
+- `! MODIFICADO` — el tamaño cambió (detectado sin re-hashear, rápido)
+- `! MODIFICADO` — el hash cambió (contenido alterado con mismo tamaño)
+
+```bash
+# Revisar sin modificar nada
+media-index verify
+
+# Revisar y eliminar de la BD los inválidos
+media-index verify --prune
+
+# Solo mostrar problemas
+media-index verify --quiet --prune
+```
+
+> Para archivos grandes (> 100 MB) que se indexaron con hash parcial, `verify` usa la misma estrategia parcial para comparar — los resultados son consistentes con lo que se guardó.
+
+---
+
+### `clean` — Limpiar entradas no deseadas de la BD
+
+Elimina entradas de la base de datos sin borrar archivos del disco. Útil para quitar metadatos basura que se indexaron por error.
+
+```bash
+media-index clean [--macos-junk]
+```
+
+| Argumento | Descripción |
+|-----------|-------------|
+| `--macos-junk` | Eliminar entradas de `__MACOSX/`, archivos `._*` y `.DS_Store` indexados desde ZIPs creados en macOS |
+
+```bash
+# Limpiar basura macOS de la BD
+media-index clean --macos-junk
+```
+
+**Salida:**
+
+```
+  ✓ 47 entrada(s) de basura macOS eliminadas de la BD
+    Los archivos en disco no fueron tocados.
+```
+
+Sin opciones, muestra las opciones disponibles. Los archivos en disco nunca se borran con este comando.
+
+---
+
 ### `doctor` — Verificar dependencias
 
 ```bash
@@ -511,6 +604,15 @@ media-index export --output "index_$(date +%Y%m%d).json"
 
 # stl-thumb en WSL2 sin GPU
 LIBGL_ALWAYS_SOFTWARE=1 media-index thumbs --tipo td --force
+
+# Simular limpieza total antes de ejecutarla
+media-index dupes --delete --aggressive --prefer-archive --dry-run
+
+# Verificar y purgar entradas rotas de la BD
+media-index verify --prune --quiet
+
+# Limpiar basura macOS después de indexar ZIPs de Mac
+media-index clean --macos-junk
 ```
 
 ---
