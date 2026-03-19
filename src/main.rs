@@ -402,11 +402,13 @@ fn cmd_dupes_delete(
         .collect();
 
     // ── --prefer-archive: canónicos sueltos que ya viven en un comprimido ──
-    // Si el canónico es un archivo suelto y TODOS sus duplicados están en comprimidos,
-    // el contenido ya está preservado en el zip/rar → borramos el suelto.
-    let mut deleted_files  = 0usize;
-    let mut freed_bytes    = 0u64;
-    let mut errors_delete  = 0usize;
+    let mut deleted_files     = 0usize;
+    let mut freed_bytes       = 0u64;
+    let mut errors_delete     = 0usize;
+    // Paths de canónicos que borramos en este paso — necesario para que
+    // --aggressive no asuma que el comprimido es la única copia cuando
+    // el canónico acaba de borrarse en la misma ejecución.
+    let mut deleted_canonicals: std::collections::HashSet<String> = Default::default();
 
     if prefer_archive {
         for g in groups {
@@ -422,6 +424,7 @@ fn cmd_dupes_delete(
                             Ok(_) => {
                                 freed_bytes   += meta.len();
                                 deleted_files += 1;
+                                deleted_canonicals.insert(g.canonical_path.clone());
                                 println!("  {} {} {}",
                                     "✓".green(),
                                     g.canonical_path.dimmed(),
@@ -435,6 +438,7 @@ fn cmd_dupes_delete(
                     }
                     Err(_) => {
                         deleted_files += 1;
+                        deleted_canonicals.insert(g.canonical_path.clone());
                         println!("  {} {} (ya no existía)", "·".dimmed(), g.canonical_path.dimmed());
                     }
                 }
@@ -484,58 +488,72 @@ fn cmd_dupes_delete(
             "--aggressive".bold());
     }
 
-    // ── Modo agresivo: borrar comprimidos completos si todo su contenido es duplicado ──
+    // ── Modo agresivo: borrar comprimidos completos si todo su contenido tiene copia ──
     let mut deleted_archives = 0usize;
 
     if aggressive && !in_archives.is_empty() {
         // Agrupar duplicate_paths por comprimido
-        let mut by_archive: std::collections::HashMap<String, Vec<String>> =
+        let mut by_archive: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
         for plan in &in_archives {
             if let Some(arc) = &plan.archive_path {
-                by_archive.entry(arc.clone())
-                    .or_default()
-                    .push(plan.path.clone());
+                *by_archive.entry(arc.clone()).or_insert(0) += 1;
             }
         }
 
-        for (archive_path, dup_paths_in_arc) in &by_archive {
+        // Convergencia iterativa: marcar comprimidos como borrables solo si
+        // todo su contenido tiene copia fuera del conjunto de borrables.
+        // Repetir hasta que el conjunto no cambie (fixpoint).
+        let mut to_delete: std::collections::HashSet<String> = Default::default();
+        loop {
+            let prev_len = to_delete.len();
+            for archive_path in by_archive.keys() {
+                if to_delete.contains(archive_path) { continue; }
+                let arc = std::path::Path::new(archive_path);
+                if !arc.exists() {
+                    to_delete.insert(archive_path.clone());
+                    continue;
+                }
+                match db.can_safely_delete_archive(archive_path, &deleted_canonicals, &to_delete) {
+                    Ok(true)  => { to_delete.insert(archive_path.clone()); }
+                    Ok(false) => {}
+                    Err(e)    => eprintln!("  {} {}: {e}", "✗".red(), archive_path),
+                }
+            }
+            if to_delete.len() == prev_len { break; } // fixpoint alcanzado
+        }
+
+        // Ejecutar borrados
+        for (archive_path, dup_count) in &by_archive {
             let arc = std::path::Path::new(archive_path);
+
             if !arc.exists() {
                 println!("  {} {} (ya no existía)", "·".dimmed(), archive_path.dimmed());
                 deleted_archives += 1;
                 continue;
             }
 
-            // ¿Todos los archivos del comprimido son duplicados?
-            match db.all_contents_are_duplicates(archive_path) {
-                Ok(true) => {
-                    let bytes = arc.metadata().map(|m| m.len()).unwrap_or(0);
-                    match std::fs::remove_file(arc) {
-                        Ok(_) => {
-                            freed_bytes      += bytes;
-                            deleted_archives += 1;
-                            println!("  {} {} {}",
-                                "✓".green(),
-                                "comprimido completo:".dimmed(),
-                                archive_path.dimmed());
-                        }
-                        Err(e) => {
-                            errors_delete += 1;
-                            eprintln!("  {} {}: {e}", "✗".red(), archive_path);
-                        }
+            if to_delete.contains(archive_path) {
+                let bytes = arc.metadata().map(|m| m.len()).unwrap_or(0);
+                match std::fs::remove_file(arc) {
+                    Ok(_) => {
+                        freed_bytes      += bytes;
+                        deleted_archives += 1;
+                        println!("  {} {} {}",
+                            "✓".green(),
+                            "comprimido completo:".dimmed(),
+                            archive_path.dimmed());
+                    }
+                    Err(e) => {
+                        errors_delete += 1;
+                        eprintln!("  {} {}: {e}", "✗".red(), archive_path);
                     }
                 }
-                Ok(false) => {
-                    println!("  {} {} — tiene archivos únicos, no se borra ({} duplicado(s) dentro)",
-                        "⊡".yellow(),
-                        archive_path.yellow(),
-                        dup_paths_in_arc.len());
-                }
-                Err(e) => {
-                    eprintln!("  {} {}: {e}", "✗".red(), archive_path);
-                    errors_delete += 1;
-                }
+            } else {
+                println!("  {} {} — tiene archivos únicos o es la única copia, no se borra ({} duplicado(s) dentro)",
+                    "⊡".yellow(),
+                    archive_path.yellow(),
+                    dup_count);
             }
         }
     }

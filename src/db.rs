@@ -149,10 +149,23 @@ impl Database {
             let canonical_score = copy_score(&canonical_path);
 
             if incoming_score < canonical_score {
-                // El recién llegado parece más original — promoverlo a canónico
+                // El recién llegado parece más original — promoverlo a canónico.
+                // Actualizar current_path, original_name, source_archive y path_in_archive
+                // para que all_contents_are_duplicates() funcione correctamente.
                 self.conn.execute(
-                    "UPDATE files SET current_path = ?1, original_name = ?2 WHERE id = ?3",
-                    params![entry.current_path, entry.original_name, canonical_id],
+                    "UPDATE files
+                     SET current_path    = ?1,
+                         original_name   = ?2,
+                         source_archive  = ?3,
+                         path_in_archive = ?4
+                     WHERE id = ?5",
+                    params![
+                        entry.current_path,
+                        entry.original_name,
+                        entry.source_archive,
+                        entry.path_in_archive,
+                        canonical_id,
+                    ],
                 )?;
                 // El viejo canónico pasa a ser duplicado
                 self.conn.execute(
@@ -160,7 +173,7 @@ impl Database {
                      VALUES (?1, ?2)",
                     params![canonical_id, canonical_path],
                 )?;
-                return Ok((canonical_id, false, None)); // el recién llegado es ahora canónico
+                return Ok((canonical_id, false, None));
             }
 
             self.conn.execute(
@@ -320,6 +333,84 @@ impl Database {
         }
 
         Ok((files_removed, dupes_removed))
+    }
+
+    /// Devuelve true si el comprimido puede borrarse de forma segura.
+    /// Condición: TODOS los archivos que contiene tienen al menos una copia
+    /// en otro lugar que no esté siendo borrado en esta misma operación.
+    ///
+    /// No depende de la distinción canónico/duplicado — trabaja directamente
+    /// con hashes, que es la fuente de verdad real.
+    pub fn can_safely_delete_archive(
+        &self,
+        archive_path:      &str,
+        deleted_paths:     &std::collections::HashSet<String>,
+        archives_to_del:   &std::collections::HashSet<String>,
+    ) -> Result<bool> {
+        // 1. Obtener TODOS los hashes del comprimido (canónicos + duplicados)
+        let hashes: Vec<String> = {
+            let mut stmt = self.conn.prepare(
+                "-- Canónicos cuya fuente es este comprimido
+                 SELECT blake3_hash FROM files
+                 WHERE source_archive = ?1
+                   AND path_in_archive IS NOT NULL
+                 UNION
+                 -- Duplicados cuya ruta es dentro de este comprimido
+                 SELECT DISTINCT f.blake3_hash
+                 FROM files f
+                 JOIN duplicates d ON d.canonical_id = f.id
+                 WHERE d.duplicate_path LIKE ?2"
+            )?;
+            stmt.query_map(
+                params![archive_path, format!("{archive_path}::%")],
+                |r| r.get(0),
+            )?.filter_map(|r| r.ok()).collect()
+        };
+
+        // Si no hay ningún archivo indexado → no borrar (vacío o no escaneado)
+        if hashes.is_empty() { return Ok(false); }
+
+        // 2. Para cada hash, verificar que existe otra copia fuera de este comprimido
+        for hash in &hashes {
+            let copies: Vec<String> = {
+                let mut stmt = self.conn.prepare(
+                    "SELECT current_path FROM files WHERE blake3_hash = ?1
+                     UNION
+                     SELECT d.duplicate_path
+                     FROM duplicates d
+                     JOIN files f ON f.id = d.canonical_id
+                     WHERE f.blake3_hash = ?1"
+                )?;
+                stmt.query_map(params![hash, hash], |r| r.get(0))?
+                    .filter_map(|r| r.ok())
+                    .collect()
+            };
+
+            let has_surviving_copy = copies.iter().any(|copy| {
+                // Excluir copias dentro de ESTE comprimido
+                if copy.starts_with(&format!("{archive_path}::")) || copy == archive_path {
+                    return false;
+                }
+                // Excluir paths ya borrados en este run
+                if deleted_paths.contains(copy) { return false; }
+
+                if copy.contains("::") {
+                    // Copia dentro de otro comprimido
+                    let parent = copy.splitn(2, "::").next().unwrap_or("");
+                    // Ese comprimido no debe estar siendo borrado
+                    if archives_to_del.contains(parent) { return false; }
+                    // Y debe existir en disco
+                    std::path::Path::new(parent).exists()
+                } else {
+                    // Archivo suelto: debe existir en disco
+                    std::path::Path::new(copy).exists()
+                }
+            });
+
+            if !has_surviving_copy { return Ok(false); }
+        }
+
+        Ok(true)
     }
 
     /// Devuelve true si TODOS los archivos indexados del comprimido son duplicados.
@@ -532,6 +623,9 @@ pub enum SearchDetail {
 ///
 /// Patrones detectados (Windows/macOS/Linux en español e inglés):
 ///   " - copia", " - copia (2)", "- Copy", " (1)", "_copy", "backup", etc.
+///
+/// Tiebreaker: cuando dos paths tienen el mismo score de copia, se prefiere el de
+/// nombre más largo (más descriptivo). Ej: "hellboy.rar::film" > "h.rar::film".
 fn copy_score(path: &str) -> u32 {
     let name = std::path::Path::new(path)
         .file_stem()
@@ -541,28 +635,34 @@ fn copy_score(path: &str) -> u32 {
     let mut score = 0u32;
 
     // Windows español: "archivo - copia", "archivo - copia (2)"
-    if name.contains(" - copia") { score += 100; }
+    if name.contains(" - copia") { score += 10_000; }
 
     // Windows inglés: "file - Copy", "file - Copy (2)"
-    if name.contains(" - copy") { score += 100; }
+    if name.contains(" - copy") { score += 10_000; }
 
     // macOS / Linux: "file (1)", "file (2)", ...
     if name.ends_with(')') {
         let re = name.trim_end_matches(|c: char| c.is_ascii_digit() || c == ' ' || c == '(');
         let suffix = &name[re.len()..];
-        if suffix.trim().starts_with('(') { score += 80; }
+        if suffix.trim().starts_with('(') { score += 8_000; }
     }
 
     // Sufijos numéricos: "file_1", "file_2", "file 1", "file 2"
     if name.chars().last().map(|c| c.is_ascii_digit()).unwrap_or(false) {
         let trimmed = name.trim_end_matches(|c: char| c.is_ascii_digit());
-        if trimmed.ends_with('_') || trimmed.ends_with(' ') { score += 50; }
+        if trimmed.ends_with('_') || trimmed.ends_with(' ') { score += 5_000; }
     }
 
     // Palabras clave genéricas en el nombre
     for keyword in &["_copy", "_backup", "_bak", " backup", " bak", "copy_of", "copia_de"] {
-        if name.contains(keyword) { score += 60; }
+        if name.contains(keyword) { score += 6_000; }
     }
+
+    // Tiebreaker: penalizar nombres cortos. Nombres más largos son más descriptivos
+    // y probablemente más originales (ej. "hellboy" > "h", "documento" > "doc1").
+    // La penalización es pequeña (max 255) para no superar ningún patrón de copia.
+    let name_len = name.chars().count().min(255) as u32;
+    score += 255u32.saturating_sub(name_len);
 
     score
 }

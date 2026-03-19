@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use colored::Colorize;
 
-pub const DEFAULT_SIZE:    u32 = 256;
-pub const DEFAULT_QUALITY: u8  = 85;
+// pub const DEFAULT_SIZE:    u32 = 256;
+// pub const DEFAULT_QUALITY: u8  = 85;
 
 // Fondo oscuro
 const DARK_BG: [u8; 3] = [28, 28, 32];
