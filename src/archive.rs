@@ -20,6 +20,22 @@ pub fn extract_media_files(path: &Path, archive_type: &ArchiveType) -> Result<Ve
 
 const MAX_IN_MEMORY: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
 
+/// Devuelve true si la entrada es basura generada por macOS que no debe indexarse:
+/// - carpeta __MACOSX/ completa (metadatos HFS+ embebidos en ZIPs creados en macOS)
+/// - archivos AppleDouble con prefijo ._ (resource forks)
+/// - .DS_Store (metadatos de Finder)
+fn is_macos_junk(name: &str) -> bool {
+    // Normalizar separadores para comparar de forma uniforme
+    let n = name.replace('\\', "/");
+    // Cualquier componente del path que sea __MACOSX
+    if n.split('/').any(|seg| seg == "__MACOSX") { return true; }
+    // Archivo cuyo nombre base empieza por ._  (AppleDouble resource fork)
+    if n.split('/').last().map(|base| base.starts_with("._")).unwrap_or(false) { return true; }
+    // .DS_Store
+    if n.split('/').last().map(|base| base == ".DS_Store").unwrap_or(false) { return true; }
+    false
+}
+
 fn extract_zip(path: &Path) -> Result<Vec<ExtractedFile>> {
     let file = std::fs::File::open(path)?;
     let mut archive = zip::ZipArchive::new(file)?;
@@ -31,6 +47,7 @@ fn extract_zip(path: &Path) -> Result<Vec<ExtractedFile>> {
         };
         if entry.is_dir() { continue; }
         let name = entry.name().to_string();
+        if is_macos_junk(&name) { continue; }
         let ext  = ext_of(&name);
         if entry.size() > MAX_IN_MEMORY { continue; }
 
@@ -50,6 +67,7 @@ fn extract_7z(path: &Path) -> Result<Vec<ExtractedFile>> {
     archive.for_each_entries(|entry, reader| {
         if entry.is_directory() { return Ok(true); }
         let name = entry.name().to_string();
+        if is_macos_junk(&name) { return Ok(true); }
         let ext  = ext_of(&name);
         if entry.size() > MAX_IN_MEMORY { return Ok(true); }
         let mut data = Vec::with_capacity(entry.size() as usize);
@@ -102,7 +120,12 @@ fn extract_rar(path: &Path) -> Result<Vec<ExtractedFile>> {
     let mut results = vec![];
     for entry in walkdir::WalkDir::new(&tmp).into_iter().flatten() {
         if !entry.file_type().is_file() { continue; }
-        let p   = entry.path();
+        let p = entry.path();
+        // Obtener path relativo al tmp para evaluar __MACOSX y ._
+        let rel = p.strip_prefix(&tmp).unwrap_or(p)
+            .to_string_lossy().to_string();
+        if is_macos_junk(&rel) { continue; }
+
         let ext = p.extension()
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_default();

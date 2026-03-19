@@ -422,6 +422,57 @@ impl Database {
         Ok(true)
     }
 
+    /// Devuelve todos los archivos indexados con su hash y tamaño para verificación.
+    /// Excluye los que viven dentro de comprimidos (no se pueden re-hashear sin extraer).
+    pub fn files_for_verify(&self) -> Result<Vec<(i64, String, String, u64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, blake3_hash, current_path, size_bytes
+             FROM files
+             WHERE source_archive IS NULL
+             ORDER BY size_bytes DESC"
+        )?;
+        let results = stmt.query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)? as u64))
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(results)
+    }
+
+    /// Elimina de la BD un archivo canónico por id (y sus duplicados en cascade).
+    pub fn remove_file(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM files WHERE id = ?1", rusqlite::params![id])?;
+        Ok(())
+    }
+
+    /// Elimina todas las entradas de basura macOS (__MACOSX/, ._*, .DS_Store)
+    /// que hayan podido indexarse antes de que existiera el filtro.
+    /// Devuelve el número de entradas eliminadas.
+    pub fn purge_macos_junk(&self) -> Result<usize> {
+        // Duplicados con ruta de basura macOS
+        let dup_del = self.conn.execute(
+            "DELETE FROM duplicates
+             WHERE duplicate_path LIKE '%::__MACOSX/%'
+                OR duplicate_path LIKE '%::.__%'
+                OR duplicate_path LIKE '%::.DS_Store'",
+            [],
+        )?;
+
+        // Canónicos con ruta de basura macOS (CASCADE elimina sus duplicados y meta)
+        let file_del = self.conn.execute(
+            "DELETE FROM files
+             WHERE current_path LIKE '%::__MACOSX/%'
+                OR current_path LIKE '%::.__%'
+                OR current_path LIKE '%::.DS_Store'
+                OR (source_archive IS NOT NULL AND (
+                       path_in_archive LIKE '__MACOSX/%'
+                    OR path_in_archive LIKE '._%'
+                    OR path_in_archive = '.DS_Store'
+                ))",
+            [],
+        )?;
+
+        Ok(dup_del + file_del)
+    }
+
     /// Devuelve todos los archivos candidatos a thumbnail (imágenes, videos y 3D),
     /// incluyendo los que están dentro de comprimidos.
     pub fn files_for_thumbs(

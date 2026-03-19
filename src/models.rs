@@ -193,6 +193,9 @@ pub struct ScanStats {
     pub duplicates:      usize,
     pub bytes_dup:       u64,
     pub errors:          usize,
+    /// Archivos hasheados parcialmente por superar el umbral de tamaño.
+    /// La deduplicación es aproximada para estos: ver verify.
+    pub partial_hashes:  usize,
 }
 
 impl ScanStats {

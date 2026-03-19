@@ -91,6 +91,16 @@ enum Commands {
     /// Verificar dependencias opcionales
     Doctor,
 
+    /// Re-hashear archivos indexados y detectar modificados, corrompidos o faltantes
+    Verify {
+        /// Eliminar de la BD las entradas con archivos ya no existentes o corrompidos
+        #[arg(short, long)]
+        prune: bool,
+        /// Mostrar solo los archivos con problemas (omitir los OK)
+        #[arg(short, long)]
+        quiet: bool,
+    },
+
     /// Generar thumbnails de imágenes, videos y modelos 3D
     Thumbs {
         /// Filtrar por tipo (por defecto genera los tres tipos)
@@ -108,6 +118,13 @@ enum Commands {
         /// Mostrar errores detallados por cada archivo
         #[arg(short, long)]
         verbose: bool,
+    },
+
+    /// Limpiar entradas no deseadas de la BD sin borrar archivos del disco
+    Clean {
+        /// Eliminar entradas de basura macOS (__MACOSX/, ._, .DS_Store) indexadas por error
+        #[arg(long)]
+        macos_junk: bool,
     },
 
     /// Borrar toda la base de datos (pide confirmación)
@@ -153,6 +170,8 @@ fn main() -> Result<()> {
         Commands::Search { query, tipo } => cmd_search(db, &query, tipo),
         Commands::Export { output }      => cmd_export(db, &output),
         Commands::Doctor                  => cmd_doctor(),
+        Commands::Verify { prune, quiet }  => cmd_verify(db, prune, quiet),
+        Commands::Clean { macos_junk }      => cmd_clean(db, macos_junk),
         Commands::Thumbs { tipo, size, quality, force, verbose } => cmd_thumbs(db, &cli.db, tipo, size, quality, force, verbose),
         Commands::Clear { .. }           => unreachable!(),
     }
@@ -190,6 +209,16 @@ fn cmd_scan(db: Database, path: &std::path::Path, verbose: bool) -> Result<()> {
     }
     println!("  {}", "──────────────────────────────────────".dimmed());
     println!("  {} indexados en total", s.total_indexed().to_string().cyan().bold());
+
+    if s.partial_hashes > 0 {
+        println!("\n  {} {} archivo(s) grandes hasheados parcialmente (>{}) — deduplicación aproximada",
+            "⚠".yellow(),
+            s.partial_hashes.to_string().yellow(),
+            "100 MB".bold());
+        println!("  {} Usa {} para detectar falsos positivos.",
+            " ".normal(),
+            "verify".bold());
+    }
  
     Ok(())
 }
@@ -995,6 +1024,180 @@ fn extract_entry_bytes(archive_path: &str, inner_name: &str) -> anyhow::Result<V
             result
         }
     }
+}
+
+fn cmd_clean(db: Database, macos_junk: bool) -> Result<()> {
+    if !macos_junk {
+        println!("{}", "Especifica qué limpiar. Opciones disponibles:".yellow());
+        println!("  {} Eliminar basura macOS (__MACOSX/, ._, .DS_Store)",
+            "--macos-junk".bold());
+        return Ok(());
+    }
+
+    let removed = db.purge_macos_junk()?;
+    if removed == 0 {
+        println!("{}", "No se encontraron entradas de basura macOS en la BD 🎉".green());
+    } else {
+        println!("  {} {} entrada(s) de basura macOS eliminadas de la BD",
+            "✓".green(),
+            removed.to_string().green().bold());
+        println!("  {} Los archivos en disco {} fueron tocados.",
+            " ".normal(), "no".bold());
+    }
+    Ok(())
+}
+
+fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
+    use humansize::{format_size, DECIMAL};
+
+    let files = db.files_for_verify()?;
+
+    if files.is_empty() {
+        println!("{}", "No hay archivos indexados para verificar.".dimmed());
+        return Ok(());
+    }
+
+    println!("{} Verificando {} archivo(s){}\n",
+        "🔍".cyan(),
+        files.len().to_string().bold(),
+        if prune { " (--prune activo: se eliminarán entradas inválidas)" } else { "" },
+    );
+
+    let pb = indicatif::ProgressBar::new(files.len() as u64);
+    pb.set_style(indicatif::ProgressStyle::with_template(
+        "{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}"
+    )?.progress_chars("█▓░"));
+
+    let (mut ok, mut missing, mut modified, mut pruned) = (0usize, 0usize, 0usize, 0usize);
+
+    // Umbral de hash parcial — debe coincidir con scanner.rs
+    const PARTIAL_HASH_THRESHOLD: u64 = 100 * 1024 * 1024;
+    const PARTIAL_CHUNK_SIZE:     u64 = 4   * 1024 * 1024;
+
+    for (id, stored_hash, path, stored_size) in &files {
+        let p = std::path::Path::new(path);
+
+        pb.set_message(
+            p.file_name()
+                .map(|n| n.to_string_lossy().chars().take(45).collect::<String>())
+                .unwrap_or_default()
+        );
+
+        // ── 1. ¿Existe en disco? ──────────────────────────────────────────
+        let meta = match p.metadata() {
+            Ok(m)  => m,
+            Err(_) => {
+                missing += 1;
+                pb.println(format!("  {} {} {}",
+                    "✗".red(), "FALTANTE:".red().bold(), path.dimmed()));
+                if prune {
+                    let _ = db.remove_file(*id);
+                    pruned += 1;
+                }
+                pb.inc(1);
+                continue;
+            }
+        };
+
+        let current_size = meta.len();
+
+        // ── 2. ¿Cambió de tamaño? (rápido, sin re-hashear) ───────────────
+        if current_size != *stored_size {
+            modified += 1;
+            pb.println(format!("  {} {} {} (era {}, ahora {})",
+                "!".yellow().bold(),
+                "MODIFICADO:".yellow().bold(),
+                path.dimmed(),
+                format_size(*stored_size, DECIMAL).dimmed(),
+                format_size(current_size, DECIMAL).yellow()));
+            if prune {
+                let _ = db.remove_file(*id);
+                pruned += 1;
+            }
+            pb.inc(1);
+            continue;
+        }
+
+        // ── 3. Re-hashear y comparar ──────────────────────────────────────
+        let current_hash = if current_size <= PARTIAL_HASH_THRESHOLD {
+            match std::fs::read(p) {
+                Ok(data) => blake3::hash(&data).to_hex().to_string(),
+                Err(e) => {
+                    pb.println(format!("  {} {} {}: {e}",
+                        "✗".red(), "ERROR:".red().bold(), path.dimmed()));
+                    missing += 1;
+                    pb.inc(1);
+                    continue;
+                }
+            }
+        } else {
+            // Hash parcial — misma lógica que scanner::hash_file
+            use std::io::Read;
+            let chunk = PARTIAL_CHUNK_SIZE as usize;
+            let mut hasher = blake3::Hasher::new();
+            match std::fs::File::open(p) {
+                Err(e) => {
+                    pb.println(format!("  {} {} {}: {e}",
+                        "✗".red(), "ERROR:".red().bold(), path.dimmed()));
+                    missing += 1;
+                    pb.inc(1);
+                    continue;
+                }
+                Ok(mut file) => {
+                    let mut head = vec![0u8; chunk];
+                    let n = file.read(&mut head).unwrap_or(0);
+                    hasher.update(&head[..n]);
+                    if current_size > 2 * PARTIAL_CHUNK_SIZE {
+                        use std::io::Seek;
+                        let _ = file.seek(std::io::SeekFrom::End(-(chunk as i64)));
+                        let mut tail = vec![0u8; chunk];
+                        let n = file.read(&mut tail).unwrap_or(0);
+                        hasher.update(&tail[..n]);
+                    }
+                    hasher.update(&current_size.to_le_bytes());
+                    hasher.finalize().to_hex().to_string()
+                }
+            }
+        };
+
+        if &current_hash != stored_hash {
+            modified += 1;
+            pb.println(format!("  {} {} {}",
+                "!".yellow().bold(),
+                "HASH CAMBIADO:".yellow().bold(),
+                path.dimmed()));
+            if prune {
+                let _ = db.remove_file(*id);
+                pruned += 1;
+            }
+        } else {
+            ok += 1;
+            if !quiet {
+                pb.println(format!("  {} {}", "✓".green(), path.dimmed()));
+            }
+        }
+
+        pb.inc(1);
+    }
+
+    pb.finish_with_message("listo");
+
+    println!("\n{}", "─── Resultado ────────────────────────────────".dimmed());
+    println!("  {} OK",            ok.to_string().green().bold());
+    if missing > 0 {
+        println!("  {} faltantes",  missing.to_string().red().bold());
+    }
+    if modified > 0 {
+        println!("  {} modificados / hash cambiado", modified.to_string().yellow().bold());
+    }
+    if prune && pruned > 0 {
+        println!("  {} entrada(s) eliminadas de la BD", pruned.to_string().cyan().bold());
+    } else if (missing > 0 || modified > 0) && !prune {
+        println!("  {} Usa {} para eliminar estas entradas de la BD.",
+            "→".dimmed(), "--prune".bold());
+    }
+
+    Ok(())
 }
 
 fn cmd_clear(db_path: &str, force: bool) -> Result<()> {

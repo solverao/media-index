@@ -49,14 +49,31 @@ impl Scanner {
 
         println!("{}", "Recolectando archivos...".cyan());
 
+        let mut walk_errors = 0usize;
         let entries: Vec<PathBuf> = WalkDir::new(root)
-            .follow_links(false)
+            // follow_links(true): necesario para puntos de montaje WSL (DrvFs)
+            // y unidades de red que se exponen como symlinks en el VFS de Linux.
+            .follow_links(true)
             .into_iter()
-            .filter_map(|e| e.ok())
+            .filter_map(|e| match e {
+                Ok(entry) => Some(entry),
+                Err(err)  => {
+                    walk_errors += 1;
+                    // Mostrar solo el primer error para no inundar la salida
+                    if walk_errors == 1 {
+                        eprintln!("  {} Error de acceso: {err}", "⚠".yellow());
+                        eprintln!("  {} (errores adicionales se omiten)", " ".normal());
+                    }
+                    None
+                }
+            })
             .filter(|e| e.file_type().is_file())
             .map(|e| e.path().to_path_buf())
             .collect();
 
+        if walk_errors > 0 {
+            eprintln!("  {} {} directorio(s) inaccesibles ignorados", "⚠".yellow(), walk_errors);
+        }
         println!("{} {} archivos encontrados", "→".green(), entries.len());
 
         let pb = ProgressBar::new(entries.len() as u64);
@@ -217,16 +234,20 @@ impl Scanner {
         let media_type = entry.media_type.clone();
         let size = entry.size_bytes;
         let path = entry.current_path.clone();
+        // Los archivos sueltos grandes usan hash parcial — contabilizar para el warning
+        let is_partial = entry.source_archive.is_none() && size > PARTIAL_HASH_THRESHOLD;
 
         match self.db.lock().unwrap().insert(&entry) {
             Ok((_, true, Some(orig))) => {
                 stats.duplicates += 1;
                 stats.bytes_dup  += size;
+                if is_partial { stats.partial_hashes += 1; }
                 if self.verbose {
                     eprintln!("  {} dupl: {} ← {}", "≡".yellow(), path, orig);
                 }
             }
             Ok(_) => {
+                if is_partial { stats.partial_hashes += 1; }
                 match media_type {
                     MediaType::Print3D => stats.indexed_3d    += 1,
                     MediaType::Video   => stats.indexed_video  += 1,
