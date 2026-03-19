@@ -144,6 +144,8 @@ pub struct MetaImage {
     pub gps_lon:      Option<f64>,
     pub iso:          Option<u32>,
     pub focal_length: Option<f64>,
+    /// Perceptual hash (dHash 8×8, 16-char hex). None si el formato no es soportado.
+    pub phash:        Option<String>,
 }
 
 // ── Archives ──────────────────────────────────────────────────────────────
@@ -178,6 +180,53 @@ pub fn is_7z_multipart(name: &str) -> bool {
 
 pub fn is_rar_multipart(name: &str) -> bool {
     name.contains(".part") && name.ends_with(".rar")
+}
+
+// ── Imágenes similares (feature #1 + #2) ─────────────────────────────────
+
+pub struct SimilarImageGroup {
+    pub files: Vec<SimilarImageEntry>,
+}
+
+pub struct SimilarImageEntry {
+    pub path:   String,
+    pub name:   String,
+    pub width:  Option<u32>,
+    pub height: Option<u32>,
+    pub phash:  String,
+}
+
+// ── Audio similar (feature #3) ────────────────────────────────────────────
+
+pub struct SimilarAudioGroup {
+    pub title:  String,
+    pub artist: String,
+    pub files:  Vec<SimilarAudioEntry>,
+}
+
+pub struct SimilarAudioEntry {
+    pub path:          String,
+    pub name:          String,
+    pub duration_secs: Option<f64>,
+    pub album:         Option<String>,
+}
+
+// ── Regla de conservación al borrar duplicados (feature #6) ───────────────
+
+#[derive(Clone, Debug)]
+pub enum KeepRule { Oldest, Newest, Largest, Smallest, ShortestPath }
+
+impl KeepRule {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "oldest"                     => Some(Self::Oldest),
+            "newest"                     => Some(Self::Newest),
+            "largest"                    => Some(Self::Largest),
+            "smallest"                   => Some(Self::Smallest),
+            "shortest-path" | "shortest" => Some(Self::ShortestPath),
+            _                            => None,
+        }
+    }
 }
 
 // ── Scan stats ────────────────────────────────────────────────────────────

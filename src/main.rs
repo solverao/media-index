@@ -80,6 +80,49 @@ enum Commands {
         /// delete the loose file (the content remains in the archive).
         #[arg(short = 'p', long)]
         prefer_archive: bool,
+        /// Rule for choosing which copy to keep: oldest|newest|largest|smallest|shortest-path
+        /// Default: uses copy_score heuristic (keeps the most "original-looking" file).
+        #[arg(long, value_name = "RULE")]
+        keep: Option<String>,
+    },
+
+    /// Find visually or tonally similar files (images by perceptual hash, audio by tags)
+    Similar {
+        #[arg(value_enum)]
+        kind: SimilarKind,
+        /// Hamming distance threshold for images (0=identical .. 64=max, default 10)
+        #[arg(short = 'u', long, default_value = "10")]
+        threshold: u32,
+        #[arg(short, long)]
+        json: bool,
+    },
+
+    /// Find empty files and/or empty directories
+    Empty {
+        path: PathBuf,
+        /// Only report empty directories
+        #[arg(long)]
+        dirs_only: bool,
+        /// Only report empty files
+        #[arg(long)]
+        files_only: bool,
+        /// Delete the found items
+        #[arg(short, long)]
+        delete: bool,
+        /// Show what would be deleted without deleting anything
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Find and optionally remove broken symbolic links
+    Broken {
+        path: PathBuf,
+        /// Delete the broken symlinks
+        #[arg(short, long)]
+        delete: bool,
+        /// Show what would be deleted without deleting anything
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Search files by name
@@ -157,6 +200,9 @@ impl MediaTypeArg {
     }
 }
 
+#[derive(Clone, ValueEnum)]
+enum SimilarKind { Images, Audio }
+
 // ── Main ──────────────────────────────────────────────────────────────────
 
 fn main() -> Result<()> {
@@ -173,14 +219,21 @@ fn main() -> Result<()> {
         Commands::Scan { path, verbose, no_archives }  => cmd_scan(db, &path, verbose, no_archives),
         Commands::Watch { path, verbose, debounce, no_archives } => cmd_watch(db, &path, verbose, debounce, no_archives),
         Commands::Stats                   => cmd_stats(db),
-        Commands::Dupes { r#type, json, delete, dry_run, aggressive, prefer_archive } => cmd_dupes(db, r#type, json, delete, dry_run, aggressive, prefer_archive),
+        Commands::Dupes { r#type, json, delete, dry_run, aggressive, prefer_archive, keep } =>
+            cmd_dupes(db, r#type, json, delete, dry_run, aggressive, prefer_archive, keep),
         Commands::Search { query, r#type } => cmd_search(db, &query, r#type),
-        Commands::Export { output }      => cmd_export(db, &output),
-        Commands::Doctor                  => cmd_doctor(),
+        Commands::Export { output }        => cmd_export(db, &output),
+        Commands::Doctor                   => cmd_doctor(),
         Commands::Verify { prune, quiet }  => cmd_verify(db, prune, quiet),
-        Commands::Clean { macos_junk }      => cmd_clean(db, macos_junk),
-        Commands::Thumbs { r#type, size, quality, force, verbose } => cmd_thumbs(db, &cli.db, r#type, size, quality, force, verbose),
-        Commands::Clear { .. }           => unreachable!(),
+        Commands::Clean { macos_junk }     => cmd_clean(db, macos_junk),
+        Commands::Thumbs { r#type, size, quality, force, verbose } =>
+            cmd_thumbs(db, &cli.db, r#type, size, quality, force, verbose),
+        Commands::Similar { kind, threshold, json } => cmd_similar(db, kind, threshold, json),
+        Commands::Empty { path, dirs_only, files_only, delete, dry_run } =>
+            cmd_empty(&path, dirs_only, files_only, delete, dry_run),
+        Commands::Broken { path, delete, dry_run } =>
+            cmd_broken(&path, delete, dry_run),
+        Commands::Clear { .. } => unreachable!(),
     }
 }
 
@@ -353,7 +406,22 @@ fn cmd_dupes(
     dry_run:        bool,
     aggressive:     bool,
     prefer_archive: bool,
+    keep:           Option<String>,
 ) -> Result<()> {
+    use models::KeepRule;
+
+    let keep_rule: Option<KeepRule> = match &keep {
+        None    => None,
+        Some(s) => match KeepRule::from_str(s) {
+            Some(r) => Some(r),
+            None    => {
+                eprintln!("{} Regla desconocida: '{}'. Opciones: oldest|newest|largest|smallest|shortest-path",
+                    "✗".red(), s);
+                return Ok(());
+            }
+        },
+    };
+
     let mut groups = db.duplicates()?;
 
     if let Some(t) = &tipo {
@@ -388,7 +456,7 @@ fn cmd_dupes(
         format_size(total_bytes, DECIMAL).red());
 
     if delete {
-        return cmd_dupes_delete(&db, &groups, dry_run, aggressive, prefer_archive);
+        return cmd_dupes_delete(&db, &groups, dry_run, aggressive, prefer_archive, keep_rule.as_ref());
     }
 
     // ── List only ─────────────────────────────────────────────────────────
@@ -427,10 +495,58 @@ fn cmd_dupes_delete(
     dry_run:        bool,
     aggressive:     bool,
     prefer_archive: bool,
+    keep_rule:      Option<&models::KeepRule>,
 ) -> Result<()> {
     if dry_run {
         println!("{}", "  [DRY-RUN] No files will be modified.\n".yellow().bold());
     }
+
+    if let Some(rule) = keep_rule {
+        println!("  {} Usando regla de conservación: {:?}\n", "→".cyan(), rule);
+    }
+
+    // ── Aplicar KeepRule: recalcular qué paths son "duplicados" en cada grupo ──
+    // Cuando el usuario pasa --keep, ignoramos el canonical/duplicate de la BD
+    // y elegimos nosotros quién se queda, convirtiendo los demás en "a borrar".
+    let plans_from_keep: Option<Vec<String>> = keep_rule.map(|rule| {
+        let mut to_delete: Vec<String> = vec![];
+        for g in groups {
+            // Construir lista completa del grupo: canonical + duplicates
+            let mut all: Vec<String> = vec![g.canonical_path.clone()];
+            all.extend(g.duplicates.iter().cloned());
+            // Filtrar solo los archivos sueltos (no dentro de archivos comprimidos)
+            // para poder leer sus metadatos del filesystem
+            let loose: Vec<&String> = all.iter().filter(|p| !p.contains("::")).collect();
+            if loose.is_empty() { continue; }
+
+            // Elegir el ganador según la regla
+            let winner = match rule {
+                models::KeepRule::Oldest => loose.iter().min_by_key(|p| {
+                    std::fs::metadata(p).and_then(|m| m.modified()).ok()
+                }),
+                models::KeepRule::Newest => loose.iter().max_by_key(|p| {
+                    std::fs::metadata(p).and_then(|m| m.modified()).ok()
+                }),
+                models::KeepRule::Largest => loose.iter().max_by_key(|p| {
+                    std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+                }),
+                models::KeepRule::Smallest => loose.iter().min_by_key(|p| {
+                    std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
+                }),
+                models::KeepRule::ShortestPath => loose.iter().min_by_key(|p| p.len()),
+            };
+
+            if let Some(keep_path) = winner {
+                // Marcar todos los demás como a borrar
+                for p in &all {
+                    if p != *keep_path && !p.contains("::") {
+                        to_delete.push(p.clone());
+                    }
+                }
+            }
+        }
+        to_delete
+    });
 
     // Classify each duplicate_path as: loose file vs. inside archive
     struct DeletePlan {
@@ -438,17 +554,24 @@ fn cmd_dupes_delete(
         archive_path: Option<String>, // Some("/a/b.zip") if "b.zip::foo.jpg"
     }
 
-    let plans: Vec<DeletePlan> = groups.iter()
-        .flat_map(|g| g.duplicates.iter())
-        .map(|d| {
-            let archive_path = if d.contains("::") {
-                d.splitn(2, "::").next().map(|s| s.to_string())
-            } else {
-                None
-            };
-            DeletePlan { path: d.clone(), archive_path }
-        })
-        .collect();
+    // Si hay KeepRule, los planes vienen de ahí. Si no, de los duplicates normales.
+    let plans: Vec<DeletePlan> = match &plans_from_keep {
+        Some(paths) => paths.iter().map(|p| DeletePlan {
+            path: p.clone(),
+            archive_path: None,
+        }).collect(),
+        None => groups.iter()
+            .flat_map(|g| g.duplicates.iter())
+            .map(|d| {
+                let archive_path = if d.contains("::") {
+                    d.splitn(2, "::").next().map(|s| s.to_string())
+                } else {
+                    None
+                };
+                DeletePlan { path: d.clone(), archive_path }
+            })
+            .collect(),
+    };
 
     // ── --prefer-archive: loose canonicals that already live in an archive ──
     let mut deleted_files     = 0usize;
@@ -1206,6 +1329,246 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
     } else if (missing > 0 || modified > 0) && !prune {
         println!("  {} Use {} to remove these entries from the DB.",
             "→".dimmed(), "--prune".bold());
+    }
+
+    Ok(())
+}
+
+// ── Feature #1/#2: imágenes similares / audio similar ────────────────────
+
+fn cmd_similar(db: Database, kind: SimilarKind, threshold: u32, as_json: bool) -> Result<()> {
+    match kind {
+        SimilarKind::Images => {
+            let groups = db.similar_images(threshold)?;
+            if groups.is_empty() {
+                println!("{}", "No similar images found 🎉".green());
+                return Ok(());
+            }
+            if as_json {
+                let json: Vec<_> = groups.iter().map(|g| {
+                    serde_json::json!({
+                        "files": g.files.iter().map(|f| serde_json::json!({
+                            "path": f.path, "name": f.name,
+                            "width": f.width, "height": f.height, "phash": f.phash,
+                        })).collect::<Vec<_>>()
+                    })
+                }).collect();
+                println!("{}", serde_json::to_string_pretty(&json)?);
+                return Ok(());
+            }
+            println!("{} grupos de imágenes similares (umbral Hamming ≤{})\n",
+                groups.len().to_string().yellow().bold(), threshold);
+            for g in &groups {
+                println!("{}", "──────────────────────────────────────".dimmed());
+                for f in &g.files {
+                    let dim = match (f.width, f.height) {
+                        (Some(w), Some(h)) => format!(" {}×{}", w, h),
+                        _ => String::new(),
+                    };
+                    println!("  {} {}{}", "🖼".normal(), f.name.bold(), dim.dimmed());
+                    println!("    {} {}", f.phash.dimmed(), f.path.dimmed());
+                }
+                println!();
+            }
+        }
+        SimilarKind::Audio => {
+            let groups = db.similar_audio()?;
+            if groups.is_empty() {
+                println!("{}", "No similar audio found 🎉".green());
+                return Ok(());
+            }
+            if as_json {
+                let json: Vec<_> = groups.iter().map(|g| {
+                    serde_json::json!({
+                        "title": g.title, "artist": g.artist,
+                        "files": g.files.iter().map(|f| serde_json::json!({
+                            "path": f.path, "name": f.name,
+                            "duration_secs": f.duration_secs, "album": f.album,
+                        })).collect::<Vec<_>>()
+                    })
+                }).collect();
+                println!("{}", serde_json::to_string_pretty(&json)?);
+                return Ok(());
+            }
+            println!("{} grupos de audio similar\n",
+                groups.len().to_string().yellow().bold());
+            for g in &groups {
+                println!("{} \"{}\" — {}",
+                    "♪".magenta(), g.title.bold(), g.artist.cyan());
+                for f in &g.files {
+                    let dur = f.duration_secs
+                        .map(|d| format!(" ({})", fmt_duration(d)))
+                        .unwrap_or_default();
+                    let album = f.album.as_deref()
+                        .map(|a| format!(" [{a}]"))
+                        .unwrap_or_default();
+                    println!("  {} {}{}{}", "↳".dimmed(), f.name.bold(),
+                        dur.dimmed(), album.dimmed());
+                    println!("    {}", f.path.dimmed());
+                }
+                println!();
+            }
+        }
+    }
+    Ok(())
+}
+
+// ── Feature #4: archivos y carpetas vacíos ───────────────────────────────
+
+fn cmd_empty(
+    root:       &std::path::Path,
+    dirs_only:  bool,
+    files_only: bool,
+    delete:     bool,
+    dry_run:    bool,
+) -> Result<()> {
+    use walkdir::WalkDir;
+
+    if !root.exists() {
+        anyhow::bail!("Directory does not exist: {}", root.display());
+    }
+
+    if dry_run {
+        println!("{}", "  [DRY-RUN] No files will be modified.\n".yellow().bold());
+    }
+
+    let mut found_files = 0usize;
+    let mut found_dirs  = 0usize;
+    let mut deleted     = 0usize;
+    let mut errors      = 0usize;
+
+    // Collect dirs bottom-up so we can detect newly-empty parents
+    let entries: Vec<_> = WalkDir::new(root)
+        .follow_links(false)
+        .contents_first(true) // bottom-up
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .collect();
+
+    for entry in &entries {
+        let path = entry.path();
+        if path == root { continue; }
+
+        let is_dir  = entry.file_type().is_dir();
+        let is_file = entry.file_type().is_file();
+
+        let is_empty = if is_file {
+            entry.metadata().map(|m| m.len() == 0).unwrap_or(false)
+        } else if is_dir {
+            std::fs::read_dir(path).map(|mut d| d.next().is_none()).unwrap_or(false)
+        } else {
+            false
+        };
+
+        if !is_empty { continue; }
+
+        if (is_file && dirs_only) || (is_dir && files_only) { continue; }
+
+        if is_file { found_files += 1; } else { found_dirs += 1; }
+
+        let label = if is_dir { "DIR ".cyan() } else { "FILE".yellow() };
+        if dry_run || !delete {
+            println!("  {} {}", label, path.display().to_string().dimmed());
+        } else {
+            let result = if is_dir {
+                std::fs::remove_dir(path).map_err(anyhow::Error::from)
+            } else {
+                std::fs::remove_file(path).map_err(anyhow::Error::from)
+            };
+            match result {
+                Ok(_) => {
+                    deleted += 1;
+                    println!("  {} {} {}", "✓".green(), label, path.display().to_string().dimmed());
+                }
+                Err(e) => {
+                    errors += 1;
+                    eprintln!("  {} {}: {e}", "✗".red(), path.display());
+                }
+            }
+        }
+    }
+
+    println!("\n{}", "─── Resultado ─────────────────────────────────".dimmed());
+    println!("  {} archivo(s) vacío(s)", found_files.to_string().yellow().bold());
+    println!("  {} carpeta(s) vacía(s)", found_dirs.to_string().cyan().bold());
+    if delete && !dry_run {
+        println!("  {} eliminado(s)", deleted.to_string().green().bold());
+        if errors > 0 { println!("  {} error(es)", errors.to_string().red()); }
+    } else if dry_run && (found_files + found_dirs) > 0 {
+        println!("  {} Ejecuta sin {} para eliminar.", "→".dimmed(), "--dry-run".bold());
+    }
+
+    Ok(())
+}
+
+// ── Feature #5: symlinks rotos ───────────────────────────────────────────
+
+fn cmd_broken(
+    root:    &std::path::Path,
+    delete:  bool,
+    dry_run: bool,
+) -> Result<()> {
+    use walkdir::WalkDir;
+
+    if !root.exists() {
+        anyhow::bail!("Directory does not exist: {}", root.display());
+    }
+
+    if dry_run {
+        println!("{}", "  [DRY-RUN] No files will be modified.\n".yellow().bold());
+    }
+
+    let mut found   = 0usize;
+    let mut deleted = 0usize;
+    let mut errors  = 0usize;
+
+    for entry in WalkDir::new(root).follow_links(false).into_iter().filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !entry.path_is_symlink() { continue; }
+
+        // Un symlink está roto si su target no existe
+        let target = std::fs::read_link(path).unwrap_or_default();
+        let broken  = !path.exists(); // exists() sigue el link; false = roto
+
+        if !broken { continue; }
+
+        found += 1;
+        let target_str = target.display().to_string();
+
+        if dry_run || !delete {
+            println!("  {} {} {} {}",
+                "⚠".yellow(),
+                path.display().to_string().bold(),
+                "→".dimmed(),
+                target_str.red());
+        } else {
+            match std::fs::remove_file(path) {
+                Ok(_) => {
+                    deleted += 1;
+                    println!("  {} {} (target: {})",
+                        "✓".green(),
+                        path.display().to_string().dimmed(),
+                        target_str.red().dimmed());
+                }
+                Err(e) => {
+                    errors += 1;
+                    eprintln!("  {} {}: {e}", "✗".red(), path.display());
+                }
+            }
+        }
+    }
+
+    println!("\n{}", "─── Resultado ─────────────────────────────────".dimmed());
+    if found == 0 {
+        println!("  {}", "No broken symlinks found 🎉".green());
+    } else {
+        println!("  {} symlink(s) roto(s) encontrado(s)", found.to_string().yellow().bold());
+        if delete && !dry_run {
+            println!("  {} eliminado(s)", deleted.to_string().green().bold());
+            if errors > 0 { println!("  {} error(es)", errors.to_string().red()); }
+        } else if dry_run {
+            println!("  {} Ejecuta sin {} para eliminar.", "→".dimmed(), "--dry-run".bold());
+        }
     }
 
     Ok(())

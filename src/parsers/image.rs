@@ -3,6 +3,12 @@ use crate::models::MetaImage;
 pub fn parse(data: &[u8]) -> MetaImage {
     let mut meta = MetaImage::default();
 
+    // ── Perceptual hash (dHash 8×8) ───────────────────────────────────────
+    // Se calcula antes de decodificar dimensiones para reutilizar la imagen
+    // ya decodificada. Falla silenciosamente para formatos no soportados
+    // (HEIC, RAW, etc.) — meta.phash queda None.
+    meta.phash = compute_phash(data);
+
     // ── Dimensions ────────────────────────────────────────────────────────
     // image::io::Reader is deprecated since image 0.25 → use ImageReader
     if let Ok(reader) = image::ImageReader::new(std::io::Cursor::new(data))
@@ -19,6 +25,24 @@ pub fn parse(data: &[u8]) -> MetaImage {
     parse_exif(data, &mut meta);
 
     meta
+}
+
+/// Calcula un perceptual hash dHash 8×8 (64 bits → 16 chars hex).
+/// Devuelve None si el formato no puede decodificarse.
+fn compute_phash(data: &[u8]) -> Option<String> {
+    use image_hasher::{HasherConfig, HashAlg};
+
+    let img = image::load_from_memory(data).ok()?;
+    let hasher = HasherConfig::new()
+        .hash_alg(HashAlg::Gradient)
+        .hash_size(8, 8)
+        .to_hasher();
+    let hash = hasher.hash_image(&img);
+    Some(bytes_to_hex(hash.as_bytes()))
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn parse_exif(data: &[u8], meta: &mut MetaImage) {

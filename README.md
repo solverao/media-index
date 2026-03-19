@@ -14,7 +14,10 @@ Indexador y deduplicador de archivos multimedia escrito en Rust. Escanea directo
 - **Canónico inteligente** — si hay `superman.stl` y `superman - copia.stl`, siempre elige el original como canónico
 - **Thumbnails** — generación de previsualizaciones para imágenes (con corrección EXIF), videos y modelos 3D
 - **Watch mode** — vigila un directorio en tiempo real e indexa cambios al instante
-- **Borrado inteligente de duplicados** con tres modos de operación
+- **Borrado inteligente de duplicados** con tres modos de operación y regla de conservación configurable
+- **Similitud perceptual** — detecta imágenes visualmente similares por dHash y audio duplicado por etiquetas
+- **Archivos y carpetas vacíos** — localiza y elimina entradas vacías del sistema de ficheros
+- **Symlinks rotos** — detecta y limpia enlaces simbólicos que apuntan a rutas inexistentes
 - **Paralelismo** con rayon para escaneos rápidos en colecciones grandes
 
 ---
@@ -61,6 +64,21 @@ media-index dupes
 
 # Simular borrado de duplicados (sin tocar nada)
 media-index dupes --delete --dry-run
+
+# Borrar duplicados conservando siempre el archivo más antiguo
+media-index dupes --delete --keep oldest
+
+# Encontrar imágenes visualmente similares
+media-index similar images
+
+# Encontrar canciones duplicadas por etiquetas
+media-index similar audio
+
+# Listar archivos y carpetas vacíos
+media-index empty ./mis-fotos
+
+# Listar y eliminar symlinks rotos
+media-index broken ./mis-fotos --delete
 
 # Generar thumbnails
 media-index thumbs
@@ -205,6 +223,7 @@ media-index dupes [--tipo <TIPO>] [--json] [--delete] [--dry-run] [--aggressive]
 | `--dry-run` | Simular el borrado sin modificar nada en disco |
 | `-a, --aggressive` | Con `--delete`: borrar el comprimido entero si **todo** su contenido son duplicados |
 | `-p, --prefer-archive` | Con `--delete`: borrar el archivo suelto si ya existe dentro de un comprimido |
+| `--keep <REGLA>` | Con `--delete`: criterio para elegir qué copia conservar (ver abajo) |
 
 #### Solo listar
 
@@ -267,17 +286,186 @@ Si el canónico es un archivo suelto y **todos** sus duplicados conocidos están
 media-index dupes --delete --prefer-archive
 ```
 
+#### Elegir qué copia conservar (`--keep`)
+
+Por defecto el programa conserva el "canónico" (el que tiene el nombre más original según la heurística interna). Con `--keep` puedes elegir el criterio explícitamente:
+
+| Valor | Descripción |
+|-------|-------------|
+| `oldest` | Conserva el archivo con fecha de modificación más antigua |
+| `newest` | Conserva el archivo con fecha de modificación más reciente |
+| `largest` | Conserva el archivo más grande |
+| `smallest` | Conserva el archivo más pequeño |
+| `shortest-path` | Conserva el que tiene la ruta más corta |
+
+```bash
+# Conservar el archivo más antiguo en cada grupo
+media-index dupes --delete --keep oldest
+
+# Simular primero para revisar el plan
+media-index dupes --delete --keep newest --dry-run
+```
+
+> `--keep` ignora la clasificación canónico/duplicado de la BD y recalcula en función del criterio elegido, leyendo los metadatos del sistema de ficheros en el momento de la ejecución.
+
 #### Combinaciones
 
 ```bash
-# Limpieza completa
-media-index dupes --delete --aggressive --prefer-archive
+# Limpieza completa con criterio explícito
+media-index dupes --delete --aggressive --prefer-archive --keep oldest
 
 # Solo duplicados de video en JSON
 media-index dupes --tipo video --json > duplicados_video.json
 ```
 
 > Después de borrar con cualquiera de estos modos, el próximo `scan` actualiza la BD automáticamente.
+
+---
+
+### `similar` — Encontrar archivos similares
+
+Detecta grupos de archivos que son visualmente o tonalmente similares, aunque no sean copias exactas (distintos hashes).
+
+```bash
+media-index similar <images|audio> [--threshold <N>] [--json]
+```
+
+| Argumento | Descripción |
+|-----------|-------------|
+| `images` | Comparar imágenes por hash perceptual (dHash 8×8) |
+| `audio` | Comparar canciones por título + artista (normalizado) |
+| `-u, --threshold` | Distancia Hamming máxima para imágenes (0=idéntico, 10=muy similar, default: `10`) |
+| `-j, --json` | Salida en formato JSON |
+
+#### Imágenes similares
+
+Utiliza un **dHash 8×8** (64 bits, 16 chars hex) calculado en el momento del escaneo y almacenado en la columna `phash` de `meta_image`. Agrupa las imágenes con distancia Hamming ≤ `threshold` usando Union-Find.
+
+```bash
+# Buscar imágenes muy similares (threshold por defecto 10)
+media-index similar images
+
+# Solo imágenes prácticamente idénticas
+media-index similar images --threshold 3
+
+# Exportar grupos en JSON
+media-index similar images --json > similares.json
+```
+
+**Salida:**
+
+```
+3 grupos de imágenes similares (umbral Hamming ≤10)
+
+──────────────────────────────────────
+  🖼 vacaciones_playa.jpg 4032×3024
+    a1b2c3d4e5f6a7b8  /fotos/2023/vacaciones_playa.jpg
+  🖼 vacaciones_playa_edit.jpg 4032×3024
+    a1b2c3d4e5f6a9b9  /fotos/editadas/vacaciones_playa_edit.jpg
+```
+
+> El phash se calcula automáticamente al escanear imágenes. En bases de datos existentes la columna `phash` se agrega como migración automática — re-escanea para poblar los valores.
+
+#### Audio similar
+
+Agrupa canciones que comparten el mismo **título + artista** (comparación insensible a mayúsculas y espacios). Útil para encontrar la misma canción en distintos formatos o álbumes.
+
+```bash
+media-index similar audio
+media-index similar audio --json
+```
+
+**Salida:**
+
+```
+2 grupos de audio similar
+
+♪ "Bohemian Rhapsody" — queen
+  ↳ bohemian_rhapsody.mp3 (5:54) [A Night at the Opera]
+    /musica/classicos/bohemian_rhapsody.mp3
+  ↳ bohemian_rhapsody.flac (5:54) [Remaster 2011]
+    /musica/hifi/bohemian_rhapsody.flac
+```
+
+---
+
+### `empty` — Encontrar archivos y carpetas vacíos
+
+Busca recursivamente archivos de tamaño cero y directorios sin contenido.
+
+```bash
+media-index empty <PATH> [--dirs-only] [--files-only] [--delete] [--dry-run]
+```
+
+| Argumento | Descripción |
+|-----------|-------------|
+| `PATH` | Directorio raíz donde buscar (obligatorio) |
+| `--dirs-only` | Reportar solo directorios vacíos |
+| `--files-only` | Reportar solo archivos vacíos |
+| `-d, --delete` | Eliminar los elementos encontrados |
+| `--dry-run` | Mostrar qué se eliminaría sin tocar nada |
+
+```bash
+# Ver qué hay vacío
+media-index empty ~/Downloads
+
+# Simular borrado
+media-index empty ~/Downloads --delete --dry-run
+
+# Borrar solo carpetas vacías
+media-index empty ~/Downloads --dirs-only --delete
+```
+
+**Salida:**
+
+```
+  FILE /home/usuario/Downloads/placeholder.txt
+  DIR  /home/usuario/Downloads/carpeta_vieja/
+
+─── Resultado ─────────────────────────────────
+  1 archivo(s) vacío(s)
+  1 carpeta(s) vacía(s)
+  → Ejecuta sin --dry-run para eliminar.
+```
+
+> El recorrido es **bottom-up**, por lo que un directorio que queda vacío tras borrar sus hijos también se detecta en el mismo pase.
+
+---
+
+### `broken` — Encontrar symlinks rotos
+
+Busca recursivamente enlaces simbólicos cuyo destino ya no existe en disco.
+
+```bash
+media-index broken <PATH> [--delete] [--dry-run]
+```
+
+| Argumento | Descripción |
+|-----------|-------------|
+| `PATH` | Directorio raíz donde buscar (obligatorio) |
+| `-d, --delete` | Eliminar los symlinks rotos encontrados |
+| `--dry-run` | Mostrar qué se eliminaría sin tocar nada |
+
+```bash
+# Listar symlinks rotos
+media-index broken /opt/apps
+
+# Simular borrado
+media-index broken /opt/apps --delete --dry-run
+
+# Borrar directamente
+media-index broken /opt/apps --delete
+```
+
+**Salida:**
+
+```
+  ⚠ /opt/apps/legacy → /usr/local/lib/libfoo.so.1
+
+─── Resultado ─────────────────────────────────
+  1 symlink(s) roto(s) encontrado(s)
+  → Ejecuta sin --dry-run para eliminar.
+```
 
 ---
 
@@ -545,11 +733,13 @@ El índice se guarda en SQLite con WAL mode. El esquema principal:
 ```
 files           — un registro por contenido único (hash BLAKE3)
 duplicates      — paths adicionales con el mismo contenido
-meta_image      — metadatos EXIF de imágenes
+meta_image      — metadatos EXIF de imágenes + phash perceptual (dHash 8×8)
 meta_audio      — tags ID3/Vorbis/etc de audio
 meta_video      — metadatos de video vía ffprobe
 meta_3d         — geometría de modelos 3D (triángulos, vértices, dimensiones)
 ```
+
+La columna `phash` en `meta_image` se agrega automáticamente como migración en bases de datos existentes. Re-escanea para poblar los valores en archivos ya indexados.
 
 ### Deduplicación
 
@@ -612,6 +802,21 @@ LIBGL_ALWAYS_SOFTWARE=1 media-index thumbs --tipo td --force
 
 # Simular limpieza total antes de ejecutarla
 media-index dupes --delete --aggressive --prefer-archive --dry-run
+
+# Borrar duplicados conservando siempre la copia con la ruta más corta
+media-index dupes --delete --keep shortest-path
+
+# Encontrar imágenes casi idénticas (ediciones mínimas, redimensionados)
+media-index similar images --threshold 5
+
+# Exportar imágenes similares para revisión manual
+media-index similar images --json > similares.json
+
+# Limpiar carpetas y archivos vacíos residuales tras una migración
+media-index empty /ruta/migrada --delete
+
+# Revisar symlinks rotos antes de borrarlos
+media-index broken /opt --dry-run --delete
 
 # Verificar y purgar entradas rotas de la BD
 media-index verify --prune --quiet

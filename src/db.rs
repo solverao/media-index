@@ -90,7 +90,8 @@ impl Database {
                 gps_lat      REAL,
                 gps_lon      REAL,
                 iso          INTEGER,
-                focal_length REAL
+                focal_length REAL,
+                phash        TEXT
             );
 
             -- Duplicates
@@ -110,7 +111,16 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_audio_artist    ON meta_audio(artist);
             CREATE INDEX IF NOT EXISTS idx_audio_album     ON meta_audio(album);
             CREATE INDEX IF NOT EXISTS idx_video_title     ON meta_video(title);
+            CREATE INDEX IF NOT EXISTS idx_image_phash     ON meta_image(phash);
         ")?;
+
+        // Migración para DBs existentes: agrega phash si la columna no existe.
+        // ALTER TABLE falla silenciosamente si la columna ya existe.
+        let _ = self.conn.execute("ALTER TABLE meta_image ADD COLUMN phash TEXT", []);
+        let _ = self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_image_phash ON meta_image(phash)", []
+        );
+
         Ok(())
     }
 
@@ -265,13 +275,14 @@ impl Database {
         self.conn.execute(
             "INSERT INTO meta_image
              (file_id, width, height, color_space, has_alpha, camera_make,
-              camera_model, taken_at, gps_lat, gps_lon, iso, focal_length)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+              camera_model, taken_at, gps_lat, gps_lon, iso, focal_length, phash)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
             params![
                 id, m.width, m.height, m.color_space,
                 m.has_alpha.map(|v| v as i32),
                 m.camera_make, m.camera_model, m.taken_at,
                 m.gps_lat, m.gps_lon, m.iso, m.focal_length,
+                m.phash,
             ],
         )?;
         Ok(())
@@ -616,9 +627,122 @@ impl Database {
 
         Ok(results)
     }
+
+    // ── Similitud perceptual ──────────────────────────────────────────────
+
+    /// Agrupa imágenes por distancia Hamming de su phash.
+    /// threshold: 0 = idéntico, ≤10 = muy similar, ≤20 = similar.
+    pub fn similar_images(&self, threshold: u32) -> Result<Vec<crate::models::SimilarImageGroup>> {
+        use crate::models::{SimilarImageGroup, SimilarImageEntry};
+
+        let rows: Vec<(String, String, i64, i64, String)> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT f.current_path, f.original_name,
+                        COALESCE(i.width,0), COALESCE(i.height,0), i.phash
+                 FROM files f
+                 JOIN meta_image i ON i.file_id = f.id
+                 WHERE i.phash IS NOT NULL
+                 ORDER BY f.size_bytes DESC"
+            )?;
+            stmt.query_map([], |r| Ok((
+                r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?
+            )))?.filter_map(|r| r.ok()).collect()
+        };
+
+        let n = rows.len();
+        if n < 2 { return Ok(vec![]); }
+
+        // Union-Find para agrupar por similitud
+        let mut parent: Vec<usize> = (0..n).collect();
+        for i in 0..n {
+            for j in (i+1)..n {
+                if let Some(dist) = phash_distance(&rows[i].4, &rows[j].4) {
+                    if dist <= threshold {
+                        let ri = uf_find(&mut parent, i);
+                        let rj = uf_find(&mut parent, j);
+                        if ri != rj { parent[ri] = rj; }
+                    }
+                }
+            }
+        }
+
+        let mut groups: std::collections::HashMap<usize, Vec<usize>> = Default::default();
+        for i in 0..n { groups.entry(uf_find(&mut parent, i)).or_default().push(i); }
+
+        Ok(groups.into_values()
+            .filter(|v| v.len() >= 2)
+            .map(|idx| SimilarImageGroup {
+                files: idx.into_iter().map(|i| SimilarImageEntry {
+                    path:   rows[i].0.clone(),
+                    name:   rows[i].1.clone(),
+                    width:  if rows[i].2 > 0 { Some(rows[i].2 as u32) } else { None },
+                    height: if rows[i].3 > 0 { Some(rows[i].3 as u32) } else { None },
+                    phash:  rows[i].4.clone(),
+                }).collect(),
+            })
+            .collect())
+    }
+
+    /// Agrupa canciones con mismo título + artista (normalizado a lowercase).
+    pub fn similar_audio(&self) -> Result<Vec<crate::models::SimilarAudioGroup>> {
+        use crate::models::{SimilarAudioGroup, SimilarAudioEntry};
+
+        let rows: Vec<(String, String, String, String, Option<f64>, Option<String>)> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT f.current_path, f.original_name,
+                        LOWER(TRIM(COALESCE(a.title,''))),
+                        LOWER(TRIM(COALESCE(a.artist,''))),
+                        a.duration_secs, a.album
+                 FROM files f JOIN meta_audio a ON a.file_id = f.id
+                 WHERE a.title  IS NOT NULL AND TRIM(a.title)  != ''
+                   AND a.artist IS NOT NULL AND TRIM(a.artist) != ''
+                 ORDER BY LOWER(a.artist), LOWER(a.title)"
+            )?;
+            stmt.query_map([], |r| Ok((
+                r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?
+            )))?.filter_map(|r| r.ok()).collect()
+        };
+
+        let mut map: std::collections::HashMap<
+            (String, String),
+            (String, String, Vec<SimilarAudioEntry>),
+        > = Default::default();
+
+        for (path, name, title, artist, dur, album) in rows {
+            let e = map.entry((title.clone(), artist.clone()))
+                .or_insert_with(|| (title, artist, vec![]));
+            e.2.push(SimilarAudioEntry { path, name, duration_secs: dur, album });
+        }
+
+        Ok(map.into_values()
+            .filter(|(_, _, files)| files.len() >= 2)
+            .map(|(title, artist, files)| SimilarAudioGroup { title, artist, files })
+            .collect())
+    }
 }
 
-// ── Result DTOs ───────────────────────────────────────────────────────────
+// ── Helpers privados de similitud ─────────────────────────────────────────
+
+fn uf_find(parent: &mut Vec<usize>, mut x: usize) -> usize {
+    while parent[x] != x {
+        parent[x] = parent[parent[x]]; // path compression
+        x = parent[x];
+    }
+    x
+}
+
+/// Distancia Hamming entre dos phashes en hex. Retorna None si los strings son inválidos.
+fn phash_distance(a: &str, b: &str) -> Option<u32> {
+    if a.len() != b.len() || a.len() % 2 != 0 { return None; }
+    let decode = |s: &str| -> Option<Vec<u8>> {
+        (0..s.len()).step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i+2], 16).ok())
+            .collect()
+    };
+    let ab = decode(a)?;
+    let bb = decode(b)?;
+    Some(ab.iter().zip(bb.iter()).map(|(x, y)| (x ^ y).count_ones()).sum())
+}
 
 pub struct DbStats {
     pub total:    i64,
