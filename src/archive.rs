@@ -75,10 +75,22 @@ fn extract_rar(path: &Path) -> Result<Vec<ExtractedFile>> {
         );
     }
 
+    // Incluir el hash del path absoluto para evitar colisiones cuando
+    // dos RAR distintos comparten nombre (en carpetas diferentes) y rayon
+    // los extrae en paralelo al mismo directorio temporal.
+    let path_hash = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        path.hash(&mut h);
+        h.finish()
+    };
     let tmp = std::env::temp_dir()
-        .join(format!("media_idx_{}", path.file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "tmp".into())));
+        .join(format!("media_idx_{}_{:016x}",
+            path.file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "tmp".into()),
+            path_hash,
+        ));
     std::fs::create_dir_all(&tmp)?;
 
     Command::new("unrar")

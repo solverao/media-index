@@ -63,6 +63,9 @@ enum Commands {
         /// Borrar duplicados en disco. Los que están dentro de comprimidos se reportan sin tocar.
         #[arg(short, long)]
         delete: bool,
+        /// Con --delete: mostrar qué se borraría sin borrar nada realmente.
+        #[arg(long)]
+        dry_run: bool,
         /// Con --delete: si TODOS los archivos de un comprimido son duplicados, borra el comprimido entero.
         #[arg(short, long)]
         aggressive: bool,
@@ -146,7 +149,7 @@ fn main() -> Result<()> {
         Commands::Scan { path, verbose }  => cmd_scan(db, &path, verbose),
         Commands::Watch { path, verbose, debounce } => cmd_watch(db, &path, verbose, debounce),
         Commands::Stats                   => cmd_stats(db),
-        Commands::Dupes { tipo, json, delete, aggressive, prefer_archive } => cmd_dupes(db, tipo, json, delete, aggressive, prefer_archive),
+        Commands::Dupes { tipo, json, delete, dry_run, aggressive, prefer_archive } => cmd_dupes(db, tipo, json, delete, dry_run, aggressive, prefer_archive),
         Commands::Search { query, tipo } => cmd_search(db, &query, tipo),
         Commands::Export { output }      => cmd_export(db, &output),
         Commands::Doctor                  => cmd_doctor(),
@@ -307,6 +310,7 @@ fn cmd_dupes(
     tipo:           Option<MediaTypeArg>,
     as_json:        bool,
     delete:         bool,
+    dry_run:        bool,
     aggressive:     bool,
     prefer_archive: bool,
 ) -> Result<()> {
@@ -344,7 +348,7 @@ fn cmd_dupes(
         format_size(total_bytes, DECIMAL).red());
 
     if delete {
-        return cmd_dupes_delete(&db, &groups, aggressive, prefer_archive);
+        return cmd_dupes_delete(&db, &groups, dry_run, aggressive, prefer_archive);
     }
 
     // ── Solo listar ────────────────────────────────────────────────────────
@@ -380,9 +384,14 @@ fn print_dupe_group(g: &db::DuplicateGroup) {
 fn cmd_dupes_delete(
     db:             &Database,
     groups:         &[db::DuplicateGroup],
+    dry_run:        bool,
     aggressive:     bool,
     prefer_archive: bool,
 ) -> Result<()> {
+    if dry_run {
+        println!("{}", "  [DRY-RUN] Ningún archivo será modificado.\n".yellow().bold());
+    }
+
     // Separar cada duplicate_path en: archivo suelto vs. dentro de comprimido
     struct DeletePlan {
         path:         String,         // duplicate_path completo
@@ -418,28 +427,39 @@ fn cmd_dupes_delete(
 
             if canonical_is_loose && all_dupes_in_archive {
                 let p = std::path::Path::new(&g.canonical_path);
-                match p.metadata() {
-                    Ok(meta) => {
-                        match std::fs::remove_file(p) {
-                            Ok(_) => {
-                                freed_bytes   += meta.len();
-                                deleted_files += 1;
-                                deleted_canonicals.insert(g.canonical_path.clone());
-                                println!("  {} {} {}",
-                                    "✓".green(),
-                                    g.canonical_path.dimmed(),
-                                    "(canónico suelto — copia en comprimido)".dimmed());
-                            }
-                            Err(e) => {
-                                errors_delete += 1;
-                                eprintln!("  {} {}: {e}", "✗".red(), g.canonical_path);
+                let size = p.metadata().map(|m| m.len()).unwrap_or(0);
+                if dry_run {
+                    freed_bytes   += size;
+                    deleted_files += 1;
+                    deleted_canonicals.insert(g.canonical_path.clone());
+                    println!("  {} {} {}",
+                        "~".cyan(),
+                        g.canonical_path.dimmed(),
+                        "(canónico suelto — copia en comprimido)".dimmed());
+                } else {
+                    match p.metadata() {
+                        Ok(meta) => {
+                            match std::fs::remove_file(p) {
+                                Ok(_) => {
+                                    freed_bytes   += meta.len();
+                                    deleted_files += 1;
+                                    deleted_canonicals.insert(g.canonical_path.clone());
+                                    println!("  {} {} {}",
+                                        "✓".green(),
+                                        g.canonical_path.dimmed(),
+                                        "(canónico suelto — copia en comprimido)".dimmed());
+                                }
+                                Err(e) => {
+                                    errors_delete += 1;
+                                    eprintln!("  {} {}: {e}", "✗".red(), g.canonical_path);
+                                }
                             }
                         }
-                    }
-                    Err(_) => {
-                        deleted_files += 1;
-                        deleted_canonicals.insert(g.canonical_path.clone());
-                        println!("  {} {} (ya no existía)", "·".dimmed(), g.canonical_path.dimmed());
+                        Err(_) => {
+                            deleted_files += 1;
+                            deleted_canonicals.insert(g.canonical_path.clone());
+                            println!("  {} {} (ya no existía)", "·".dimmed(), g.canonical_path.dimmed());
+                        }
                     }
                 }
             }
@@ -451,24 +471,30 @@ fn cmd_dupes_delete(
 
     for plan in &loose {
         let p = std::path::Path::new(&plan.path);
-        match p.metadata() {
-            Ok(meta) => {
-                match std::fs::remove_file(p) {
-                    Ok(_) => {
-                        freed_bytes   += meta.len();
-                        deleted_files += 1;
-                        println!("  {} {}", "✓".green(), plan.path.dimmed());
-                    }
-                    Err(e) => {
-                        errors_delete += 1;
-                        eprintln!("  {} {}: {e}", "✗".red(), plan.path);
+        let size = p.metadata().map(|m| m.len()).unwrap_or(0);
+        if dry_run {
+            freed_bytes   += size;
+            deleted_files += 1;
+            println!("  {} {}", "~".cyan(), plan.path.dimmed());
+        } else {
+            match p.metadata() {
+                Ok(meta) => {
+                    match std::fs::remove_file(p) {
+                        Ok(_) => {
+                            freed_bytes   += meta.len();
+                            deleted_files += 1;
+                            println!("  {} {}", "✓".green(), plan.path.dimmed());
+                        }
+                        Err(e) => {
+                            errors_delete += 1;
+                            eprintln!("  {} {}: {e}", "✗".red(), plan.path);
+                        }
                     }
                 }
-            }
-            Err(_) => {
-                // Ya no existía en disco; contar como limpiado igual
-                deleted_files += 1;
-                println!("  {} {} (ya no existía)", "·".dimmed(), plan.path.dimmed());
+                Err(_) => {
+                    deleted_files += 1;
+                    println!("  {} {} (ya no existía)", "·".dimmed(), plan.path.dimmed());
+                }
             }
         }
     }
@@ -523,7 +549,7 @@ fn cmd_dupes_delete(
             if to_delete.len() == prev_len { break; } // fixpoint alcanzado
         }
 
-        // Ejecutar borrados
+        // Ejecutar (o simular) borrados
         for (archive_path, dup_count) in &by_archive {
             let arc = std::path::Path::new(archive_path);
 
@@ -535,18 +561,27 @@ fn cmd_dupes_delete(
 
             if to_delete.contains(archive_path) {
                 let bytes = arc.metadata().map(|m| m.len()).unwrap_or(0);
-                match std::fs::remove_file(arc) {
-                    Ok(_) => {
-                        freed_bytes      += bytes;
-                        deleted_archives += 1;
-                        println!("  {} {} {}",
-                            "✓".green(),
-                            "comprimido completo:".dimmed(),
-                            archive_path.dimmed());
-                    }
-                    Err(e) => {
-                        errors_delete += 1;
-                        eprintln!("  {} {}: {e}", "✗".red(), archive_path);
+                if dry_run {
+                    freed_bytes      += bytes;
+                    deleted_archives += 1;
+                    println!("  {} {} {}",
+                        "~".cyan(),
+                        "comprimido completo:".dimmed(),
+                        archive_path.dimmed());
+                } else {
+                    match std::fs::remove_file(arc) {
+                        Ok(_) => {
+                            freed_bytes      += bytes;
+                            deleted_archives += 1;
+                            println!("  {} {} {}",
+                                "✓".green(),
+                                "comprimido completo:".dimmed(),
+                                archive_path.dimmed());
+                        }
+                        Err(e) => {
+                            errors_delete += 1;
+                            eprintln!("  {} {}: {e}", "✗".red(), archive_path);
+                        }
                     }
                 }
             } else {
@@ -560,15 +595,36 @@ fn cmd_dupes_delete(
 
     // ── Resumen ────────────────────────────────────────────────────────────
     println!("\n{}", "─── Resultado ────────────────────────────────".dimmed());
-    if deleted_files > 0 {
-        println!("  {} archivo(s) borrado(s)", deleted_files.to_string().green().bold());
-    }
-    if deleted_archives > 0 {
-        println!("  {} comprimido(s) borrado(s)", deleted_archives.to_string().green().bold());
-    }
-    println!("  {} liberados", format_size(freed_bytes, DECIMAL).red().bold());
-    if errors_delete > 0 {
-        println!("  {} error(es)", errors_delete.to_string().red());
+    if dry_run {
+        println!("  {} {}", "[DRY-RUN]".cyan().bold(),
+            "no se borró nada — ejecuta sin --dry-run para aplicar".dimmed());
+        if deleted_files > 0 {
+            println!("  {} archivo(s) se borrarían", deleted_files.to_string().cyan().bold());
+        }
+        if deleted_archives > 0 {
+            println!("  {} comprimido(s) se borrarían", deleted_archives.to_string().cyan().bold());
+        }
+        println!("  {} se liberarían", format_size(freed_bytes, DECIMAL).cyan().bold());
+    } else {
+        if deleted_files > 0 {
+            println!("  {} archivo(s) borrado(s)", deleted_files.to_string().green().bold());
+        }
+        if deleted_archives > 0 {
+            println!("  {} comprimido(s) borrado(s)", deleted_archives.to_string().green().bold());
+        }
+        println!("  {} liberados", format_size(freed_bytes, DECIMAL).red().bold());
+        if errors_delete > 0 {
+            println!("  {} error(es)", errors_delete.to_string().red());
+        }
+        // Sincronizar la BD con lo que acaba de borrarse del disco
+        if deleted_files > 0 || deleted_archives > 0 {
+            match db.cleanup_stale() {
+                Ok((f, d)) if f > 0 || d > 0 =>
+                    println!("  {} BD sincronizada ({} entrada(s) eliminadas)", "🧹".dimmed(), f + d),
+                Ok(_)  => {}
+                Err(e) => eprintln!("  {} Error al sincronizar BD: {e}", "✗".red()),
+            }
+        }
     }
 
     Ok(())
@@ -901,10 +957,19 @@ fn extract_entry_bytes(archive_path: &str, inner_name: &str) -> anyhow::Result<V
         ArchiveType::Rar => {
             // Para RAR extraemos todo a temp y leemos el archivo buscado
             use std::process::Command;
+            let path_hash = {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                archive_path.hash(&mut h);
+                h.finish()
+            };
             let tmp = std::env::temp_dir()
-                .join(format!("media_idx_rar_{}", std::path::Path::new(archive_path)
-                    .file_stem().map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "tmp".into())));
+                .join(format!("media_idx_rar_{}_{:016x}",
+                    std::path::Path::new(archive_path)
+                        .file_stem().map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "tmp".into()),
+                    path_hash,
+                ));
             std::fs::create_dir_all(&tmp)?;
             Command::new("unrar")
                 .args(["x", "-y", "-inul", archive_path])

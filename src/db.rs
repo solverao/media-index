@@ -279,7 +279,8 @@ impl Database {
 
     // ── Mantenimiento ─────────────────────────────────────────────────────
 
-    /// Elimina entradas cuyo path ya no existe en disco.
+    /// Elimina entradas cuyo path ya no existe en disco, incluyendo las que
+    /// provienen de comprimidos cuyo archivo padre fue borrado manualmente.
     /// Debe llamarse al inicio de cada escaneo para que los duplicados
     /// borrados manualmente no persistan en la BD.
     ///
@@ -297,9 +298,13 @@ impl Database {
 
         let mut dupes_removed = 0usize;
         for (id, path) in &dup_paths {
-            // Ignorar entradas de archivos dentro de .zip/.rar (contienen "::")
-            if path.contains("::") { continue; }
-            if !std::path::Path::new(path).exists() {
+            let stale = if let Some(archive) = path.splitn(2, "::").next().filter(|_| path.contains("::")) {
+                // Entrada dentro de un comprimido: stale si el comprimido ya no existe
+                !std::path::Path::new(archive).exists()
+            } else {
+                !std::path::Path::new(path).exists()
+            };
+            if stale {
                 self.conn.execute(
                     "DELETE FROM duplicates WHERE id = ?1",
                     rusqlite::params![id],
@@ -321,8 +326,13 @@ impl Database {
 
         let mut files_removed = 0usize;
         for (id, path) in &file_paths {
-            if path.contains("::") { continue; }
-            if !std::path::Path::new(path).exists() {
+            let stale = if let Some(archive) = path.splitn(2, "::").next().filter(|_| path.contains("::")) {
+                // Canónico dentro de un comprimido: stale si el comprimido ya no existe
+                !std::path::Path::new(archive).exists()
+            } else {
+                !std::path::Path::new(path).exists()
+            };
+            if stale {
                 self.conn.execute(
                     "DELETE FROM files WHERE id = ?1",
                     rusqlite::params![id],
