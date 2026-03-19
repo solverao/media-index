@@ -656,6 +656,337 @@ pub enum SearchDetail {
 
 // ── Helpers internos ──────────────────────────────────────────────────────
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{MediaEntry, MediaType, Metadata};
+
+    fn mem_db() -> Database {
+        Database::open(":memory:").unwrap()
+    }
+
+    fn entry(hash: &str, path: &str, name: &str) -> MediaEntry {
+        MediaEntry {
+            blake3_hash:     hash.to_string(),
+            size_bytes:      1_000,
+            original_name:   name.to_string(),
+            current_path:    path.to_string(),
+            extension:       "jpg".to_string(),
+            media_type:      MediaType::Image,
+            metadata:        Metadata::None,
+            source_archive:  None,
+            path_in_archive: None,
+        }
+    }
+
+    // ── copy_score ────────────────────────────────────────────────────────
+
+    #[test]
+    fn copy_score_original_bajo() {
+        let s = copy_score("/fotos/vacaciones.jpg");
+        assert!(s < 5_000, "score={s}");
+    }
+
+    #[test]
+    fn copy_score_copia_espanol() {
+        assert!(copy_score("/fotos/foto - copia.jpg")   >= 10_000);
+        assert!(copy_score("/fotos/foto - copia (2).jpg") >= 10_000);
+    }
+
+    #[test]
+    fn copy_score_copy_ingles() {
+        assert!(copy_score("/fotos/photo - Copy.jpg")   >= 10_000);
+    }
+
+    #[test]
+    fn copy_score_sufijo_numerico_con_guion() {
+        // "file_1", "file_2" → sufijo numérico precedido de '_'
+        assert!(copy_score("/fotos/imagen_2.jpg")  >= 5_000);
+        assert!(copy_score("/fotos/imagen_10.jpg") >= 5_000);
+    }
+
+    #[test]
+    fn copy_score_backup() {
+        assert!(copy_score("/fotos/foto_backup.jpg") >= 6_000);
+        assert!(copy_score("/fotos/foto_bak.jpg")    >= 6_000);
+    }
+
+    #[test]
+    fn copy_score_original_gana_a_copia() {
+        let orig = copy_score("/fotos/vacaciones.jpg");
+        let copy = copy_score("/fotos/vacaciones - copia.jpg");
+        assert!(orig < copy);
+    }
+
+    // ── insert: nuevo archivo ─────────────────────────────────────────────
+
+    #[test]
+    fn insert_nuevo_no_es_duplicado() {
+        let db = mem_db();
+        let (_, is_dup, canon) = db.insert(&entry("h1", "/a.jpg", "a.jpg")).unwrap();
+        assert!(!is_dup);
+        assert!(canon.is_none());
+    }
+
+    #[test]
+    fn insert_mismo_hash_distinto_path_es_duplicado() {
+        let db = mem_db();
+        db.insert(&entry("h1", "/orig/a.jpg", "a.jpg")).unwrap();
+        let (_, is_dup, canon) = db.insert(&entry("h1", "/copy/a.jpg", "a.jpg")).unwrap();
+        assert!(is_dup);
+        assert_eq!(canon.unwrap(), "/orig/a.jpg");
+    }
+
+    #[test]
+    fn insert_rescan_mismo_path_no_es_duplicado() {
+        let db = mem_db();
+        db.insert(&entry("h1", "/a.jpg", "a.jpg")).unwrap();
+        let (_, is_dup, _) = db.insert(&entry("h1", "/a.jpg", "a.jpg")).unwrap();
+        assert!(!is_dup);
+    }
+
+    #[test]
+    fn insert_promueve_mas_original_a_canonico() {
+        let db = mem_db();
+        // Primero se indexa la copia
+        db.insert(&entry("h1", "/fotos/foto - copia.jpg", "foto - copia.jpg")).unwrap();
+        // Luego el original — debe promoverse a canónico
+        let (_, is_dup, _) = db.insert(&entry("h1", "/fotos/foto.jpg", "foto.jpg")).unwrap();
+        assert!(!is_dup);
+        let groups = db.duplicates().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].canonical_path, "/fotos/foto.jpg");
+        assert!(groups[0].duplicates.contains(&"/fotos/foto - copia.jpg".to_string()));
+    }
+
+    // ── stats ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn stats_bd_vacia() {
+        let s = mem_db().stats().unwrap();
+        assert_eq!(s.total, 0);
+        assert_eq!(s.dupes, 0);
+        assert_eq!(s.bytes, 0);
+    }
+
+    #[test]
+    fn stats_con_duplicado() {
+        let db = mem_db();
+        db.insert(&entry("h1", "/a.jpg", "a.jpg")).unwrap();
+        db.insert(&entry("h2", "/b.jpg", "b.jpg")).unwrap();
+        db.insert(&entry("h1", "/c.jpg", "c.jpg")).unwrap(); // dup de h1
+        let s = db.stats().unwrap();
+        assert_eq!(s.total, 2);
+        assert_eq!(s.dupes, 1);
+    }
+
+    // ── search ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn search_encuentra_por_nombre_parcial() {
+        let db = mem_db();
+        db.insert(&entry("h1", "/fotos/vacaciones.jpg", "vacaciones.jpg")).unwrap();
+        let r = db.search("vacacion", None).unwrap();
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].name, "vacaciones.jpg");
+    }
+
+    #[test]
+    fn search_sin_resultados() {
+        let db = mem_db();
+        db.insert(&entry("h1", "/fotos/foto.jpg", "foto.jpg")).unwrap();
+        assert!(db.search("xyznotfound", None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_filtro_por_tipo() {
+        let db = mem_db();
+        db.insert(&entry("h1", "/fotos/foto.jpg", "foto.jpg")).unwrap();
+        assert!(db.search("foto", Some("video")).unwrap().is_empty());
+        assert_eq!(db.search("foto", Some("image")).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn search_insensible_a_mayusculas() {
+        let db = mem_db();
+        db.insert(&entry("h1", "/Foto.jpg", "Foto.jpg")).unwrap();
+        assert_eq!(db.search("foto", None).unwrap().len(), 1);
+        assert_eq!(db.search("FOTO", None).unwrap().len(), 1);
+    }
+
+    // ── duplicates ────────────────────────────────────────────────────────
+
+    #[test]
+    fn duplicates_vacio() {
+        assert!(mem_db().duplicates().unwrap().is_empty());
+    }
+
+    #[test]
+    fn duplicates_agrupa_correctamente() {
+        let db = mem_db();
+        db.insert(&entry("h1", "/a.jpg", "a.jpg")).unwrap();
+        db.insert(&entry("h1", "/b.jpg", "b.jpg")).unwrap();
+        db.insert(&entry("h1", "/c.jpg", "c.jpg")).unwrap();
+        let groups = db.duplicates().unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].duplicates.len(), 2);
+    }
+
+    #[test]
+    fn duplicates_dos_grupos_independientes() {
+        let db = mem_db();
+        db.insert(&entry("h1", "/a1.jpg", "a1.jpg")).unwrap();
+        db.insert(&entry("h1", "/a2.jpg", "a2.jpg")).unwrap();
+        db.insert(&entry("h2", "/b1.jpg", "b1.jpg")).unwrap();
+        db.insert(&entry("h2", "/b2.jpg", "b2.jpg")).unwrap();
+        assert_eq!(db.duplicates().unwrap().len(), 2);
+    }
+
+    // ── cleanup_stale ─────────────────────────────────────────────────────
+
+    #[test]
+    fn cleanup_stale_elimina_path_inexistente() {
+        let db = mem_db();
+        db.insert(&entry("h1", "/ruta/que/no/existe.jpg", "inexistente.jpg")).unwrap();
+        let (removed, _) = db.cleanup_stale().unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(db.stats().unwrap().total, 0);
+    }
+
+    #[test]
+    fn cleanup_stale_conserva_archivo_existente() {
+        let db = mem_db();
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        db.insert(&entry("h1", &path, "tmp.jpg")).unwrap();
+        let (removed, _) = db.cleanup_stale().unwrap();
+        assert_eq!(removed, 0);
+        assert_eq!(db.stats().unwrap().total, 1);
+    }
+
+    #[test]
+    fn cleanup_stale_elimina_duplicados_de_archivo_borrado() {
+        let db = mem_db();
+        // Canónico que sí existe
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+        db.insert(&entry("h1", &path, "real.jpg")).unwrap();
+        // Duplicado con path inexistente — cleanup_stale lo debe eliminar
+        db.insert(&entry("h1", "/no/existe/copia.jpg", "copia.jpg")).unwrap();
+        let (_, dupes_removed) = db.cleanup_stale().unwrap();
+        assert_eq!(dupes_removed, 1);
+        assert_eq!(db.duplicates().unwrap().len(), 0);
+    }
+
+    // ── purge_macos_junk ─────────────────────────────────────────────────
+
+    #[test]
+    fn purge_elimina_macosx_en_path() {
+        let db = mem_db();
+        db.insert(&entry("h1", "/arc.zip::__MACOSX/file.jpg", "file.jpg")).unwrap();
+        db.insert(&entry("h2", "/normal.jpg", "normal.jpg")).unwrap();
+        let removed = db.purge_macos_junk().unwrap();
+        assert!(removed >= 1);
+        assert_eq!(db.stats().unwrap().total, 1); // solo queda el normal
+    }
+
+    #[test]
+    fn purge_elimina_dot_underscore() {
+        let db = mem_db();
+        db.insert(&entry("h1", "/arc.zip::._hidden", "._hidden")).unwrap();
+        let removed = db.purge_macos_junk().unwrap();
+        assert!(removed >= 1);
+    }
+
+    #[test]
+    fn purge_elimina_ds_store() {
+        let db = mem_db();
+        db.insert(&entry("h1", "/arc.zip::.DS_Store", ".DS_Store")).unwrap();
+        let removed = db.purge_macos_junk().unwrap();
+        assert!(removed >= 1);
+    }
+
+    #[test]
+    fn purge_por_source_archive_y_path_in_archive() {
+        let db = mem_db();
+        let mut e = entry("h1", "/arc.zip::__MACOSX/._icon", "._icon");
+        e.source_archive  = Some("/arc.zip".to_string());
+        e.path_in_archive = Some("__MACOSX/._icon".to_string());
+        db.insert(&e).unwrap();
+        assert!(db.purge_macos_junk().unwrap() >= 1);
+        assert_eq!(db.stats().unwrap().total, 0);
+    }
+
+    #[test]
+    fn purge_no_toca_archivos_normales() {
+        let db = mem_db();
+        db.insert(&entry("h1", "/fotos/foto.jpg", "foto.jpg")).unwrap();
+        db.insert(&entry("h2", "/arc.zip::real.jpg", "real.jpg")).unwrap();
+        let removed = db.purge_macos_junk().unwrap();
+        assert_eq!(removed, 0);
+        assert_eq!(db.stats().unwrap().total, 2);
+    }
+
+    // ── files_for_verify ─────────────────────────────────────────────────
+
+    #[test]
+    fn files_for_verify_excluye_entradas_de_comprimidos() {
+        let db = mem_db();
+        db.insert(&entry("h1", "/archivo.jpg", "archivo.jpg")).unwrap();
+        let mut arc = entry("h2", "/arc.zip::inner.jpg", "inner.jpg");
+        arc.source_archive  = Some("/arc.zip".to_string());
+        arc.path_in_archive = Some("inner.jpg".to_string());
+        db.insert(&arc).unwrap();
+        let files = db.files_for_verify().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].2, "/archivo.jpg");
+    }
+
+    #[test]
+    fn files_for_verify_incluye_hash_y_size() {
+        let db = mem_db();
+        db.insert(&entry("deadbeef", "/x.jpg", "x.jpg")).unwrap();
+        let files = db.files_for_verify().unwrap();
+        assert_eq!(files[0].1, "deadbeef");
+        assert_eq!(files[0].3, 1_000);
+    }
+
+    // ── remove_file ───────────────────────────────────────────────────────
+
+    #[test]
+    fn remove_file_elimina_canonico_sin_duplicados() {
+        // remove_file está diseñado para usarse sobre archivos sin duplicados activos
+        // (canonical_id en duplicates no tiene ON DELETE CASCADE;
+        //  cleanup_stale borra los duplicados huérfanos antes de borrar el canónico)
+        let db = mem_db();
+        db.insert(&entry("h1", "/a.jpg", "a.jpg")).unwrap();
+        db.insert(&entry("h2", "/b.jpg", "b.jpg")).unwrap();
+        let files = db.files_for_verify().unwrap();
+        let id_a = files.iter().find(|f| f.2 == "/a.jpg").unwrap().0;
+        db.remove_file(id_a).unwrap();
+        assert_eq!(db.stats().unwrap().total, 1);
+        assert_eq!(db.files_for_verify().unwrap()[0].2, "/b.jpg");
+    }
+
+    #[test]
+    fn remove_file_elimina_meta_en_cascade() {
+        // Los metadatos sí tienen ON DELETE CASCADE
+        let db = mem_db();
+        let mut e = entry("h1", "/cancion.mp3", "cancion.mp3");
+        e.extension  = "mp3".to_string();
+        e.media_type = MediaType::Audio;
+        e.metadata   = Metadata::Audio(crate::models::MetaAudio {
+            duration_secs: Some(180.0),
+            artist:        Some("Artista".to_string()),
+            ..Default::default()
+        });
+        db.insert(&e).unwrap();
+        let id = db.files_for_verify().unwrap()[0].0;
+        db.remove_file(id).unwrap();
+        assert_eq!(db.stats().unwrap().total, 0);
+    }
+}
+
 /// Devuelve una puntuación de "cuánto parece una copia" basada en el nombre del archivo.
 /// Menor puntuación = más original. Se usa para decidir qué path queda como canónico.
 ///

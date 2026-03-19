@@ -61,6 +61,9 @@ exif = { package = "kamadak-exif", version = "0.5" }
 # Video: se usa ffprobe como subproceso (ver parsers/video.rs)
 # No requiere crate extra
 
+[dev-dependencies]
+tempfile = "3"
+
 [profile.release]
 opt-level     = 3
 lto           = true

@@ -150,3 +150,71 @@ fn ext_of(name: &str) -> String {
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── is_macos_junk ─────────────────────────────────────────────────────
+
+    #[test]
+    fn detecta_carpeta_macosx() {
+        assert!(is_macos_junk("__MACOSX/file.txt"));
+        assert!(is_macos_junk("dir/__MACOSX/file.txt"));
+        assert!(is_macos_junk("a/b/__MACOSX/c/d.jpg"));
+    }
+
+    #[test]
+    fn detecta_resource_fork_dot_underscore() {
+        assert!(is_macos_junk("._archivo.stl"));
+        assert!(is_macos_junk("dir/._foto.jpg"));
+        assert!(is_macos_junk("__MACOSX/._hidden"));
+    }
+
+    #[test]
+    fn detecta_ds_store() {
+        assert!(is_macos_junk(".DS_Store"));
+        assert!(is_macos_junk("subdir/.DS_Store"));
+    }
+
+    #[test]
+    fn detecta_separador_windows() {
+        // Nombres con backslash (ZIPs creados en Windows con rutas macOS)
+        assert!(is_macos_junk("__MACOSX\\file.jpg"));
+        assert!(is_macos_junk("dir\\__MACOSX\\file.jpg"));
+    }
+
+    #[test]
+    fn no_marca_archivos_normales() {
+        assert!(!is_macos_junk("archivo.jpg"));
+        assert!(!is_macos_junk("fotos/vacaciones.jpg"));
+        assert!(!is_macos_junk("modelo.stl"));
+        assert!(!is_macos_junk("dir/subdir/video.mp4"));
+    }
+
+    #[test]
+    fn no_marca_nombres_que_contienen_macosx_no_como_segmento() {
+        // "__MACOSX" en el nombre de archivo pero no como directorio
+        assert!(!is_macos_junk("mi__MACOSXarchivo.jpg"));
+    }
+
+    // ── ext_of ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn ext_of_devuelve_extension_en_minuscula() {
+        assert_eq!(ext_of("foto.JPG"), "jpg");
+        assert_eq!(ext_of("video.MP4"), "mp4");
+        assert_eq!(ext_of("modelo.STL"), "stl");
+    }
+
+    #[test]
+    fn ext_of_sin_extension_es_vacio() {
+        assert_eq!(ext_of("Makefile"), "");
+        assert_eq!(ext_of(""), "");
+    }
+
+    #[test]
+    fn ext_of_ruta_con_directorios() {
+        assert_eq!(ext_of("dir/subdir/archivo.flac"), "flac");
+    }
+}

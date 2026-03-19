@@ -204,3 +204,145 @@ impl ScanStats {
             + self.indexed_image + self.indexed_other
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    // ── MediaType::from_extension ─────────────────────────────────────────
+
+    #[test]
+    fn from_extension_imagen() {
+        assert_eq!(MediaType::from_extension("jpg"),  Some(MediaType::Image));
+        assert_eq!(MediaType::from_extension("JPG"),  Some(MediaType::Image));  // case insensitive
+        assert_eq!(MediaType::from_extension("jpeg"), Some(MediaType::Image));
+        assert_eq!(MediaType::from_extension("png"),  Some(MediaType::Image));
+        assert_eq!(MediaType::from_extension("webp"), Some(MediaType::Image));
+        assert_eq!(MediaType::from_extension("heic"), Some(MediaType::Image));
+        assert_eq!(MediaType::from_extension("cr2"),  Some(MediaType::Image));
+    }
+
+    #[test]
+    fn from_extension_audio() {
+        assert_eq!(MediaType::from_extension("mp3"),  Some(MediaType::Audio));
+        assert_eq!(MediaType::from_extension("flac"), Some(MediaType::Audio));
+        assert_eq!(MediaType::from_extension("ogg"),  Some(MediaType::Audio));
+        assert_eq!(MediaType::from_extension("wav"),  Some(MediaType::Audio));
+        assert_eq!(MediaType::from_extension("m4a"),  Some(MediaType::Audio));
+    }
+
+    #[test]
+    fn from_extension_video() {
+        assert_eq!(MediaType::from_extension("mp4"),  Some(MediaType::Video));
+        assert_eq!(MediaType::from_extension("mkv"),  Some(MediaType::Video));
+        assert_eq!(MediaType::from_extension("avi"),  Some(MediaType::Video));
+        assert_eq!(MediaType::from_extension("mov"),  Some(MediaType::Video));
+        assert_eq!(MediaType::from_extension("webm"), Some(MediaType::Video));
+    }
+
+    #[test]
+    fn from_extension_3d() {
+        assert_eq!(MediaType::from_extension("stl"), Some(MediaType::Print3D));
+        assert_eq!(MediaType::from_extension("obj"), Some(MediaType::Print3D));
+        assert_eq!(MediaType::from_extension("3mf"), Some(MediaType::Print3D));
+        assert_eq!(MediaType::from_extension("STL"), Some(MediaType::Print3D));
+    }
+
+    #[test]
+    fn from_extension_unknown_is_none() {
+        assert_eq!(MediaType::from_extension("txt"),  None);
+        assert_eq!(MediaType::from_extension("exe"),  None);
+        assert_eq!(MediaType::from_extension("pdf"),  None);
+        assert_eq!(MediaType::from_extension(""),     None);
+        assert_eq!(MediaType::from_extension("zip"),  None);
+    }
+
+    // ── MediaType::as_str / from_str ─────────────────────────────────────
+
+    #[test]
+    fn as_str_from_str_roundtrip() {
+        for mt in [
+            MediaType::Print3D,
+            MediaType::Video,
+            MediaType::Audio,
+            MediaType::Image,
+            MediaType::Other,
+        ] {
+            assert_eq!(MediaType::from_str(mt.as_str()), mt);
+        }
+    }
+
+    #[test]
+    fn from_str_unknown_es_other() {
+        assert_eq!(MediaType::from_str("desconocido"), MediaType::Other);
+        assert_eq!(MediaType::from_str(""),            MediaType::Other);
+    }
+
+    // ── ArchiveType::from_path ────────────────────────────────────────────
+
+    #[test]
+    fn archive_type_zip() {
+        assert_eq!(ArchiveType::from_path(Path::new("archivo.zip")), Some(ArchiveType::Zip));
+        assert_eq!(ArchiveType::from_path(Path::new("/ruta/al/fondo.ZIP")), Some(ArchiveType::Zip));
+    }
+
+    #[test]
+    fn archive_type_7z() {
+        assert_eq!(ArchiveType::from_path(Path::new("archivo.7z")),    Some(ArchiveType::SevenZip));
+        assert_eq!(ArchiveType::from_path(Path::new("archivo.7z.001")), Some(ArchiveType::SevenZip));
+        assert_eq!(ArchiveType::from_path(Path::new("archivo.7z.099")), Some(ArchiveType::SevenZip));
+    }
+
+    #[test]
+    fn archive_type_rar() {
+        assert_eq!(ArchiveType::from_path(Path::new("archivo.rar")),       Some(ArchiveType::Rar));
+        assert_eq!(ArchiveType::from_path(Path::new("archivo.part1.rar")), Some(ArchiveType::Rar));
+        assert_eq!(ArchiveType::from_path(Path::new("archivo.part10.rar")),Some(ArchiveType::Rar));
+    }
+
+    #[test]
+    fn archive_type_none() {
+        assert_eq!(ArchiveType::from_path(Path::new("archivo.mp4")), None);
+        assert_eq!(ArchiveType::from_path(Path::new("archivo.txt")), None);
+        assert_eq!(ArchiveType::from_path(Path::new("Makefile")),    None);
+    }
+
+    // ── is_7z_multipart / is_rar_multipart ───────────────────────────────
+
+    #[test]
+    fn multipart_7z() {
+        assert!(is_7z_multipart("backup.7z.001"));
+        assert!(is_7z_multipart("backup.7z.999"));
+        assert!(!is_7z_multipart("backup.7z"));
+        assert!(!is_7z_multipart("backup.7z.abc")); // letras, no dígitos
+    }
+
+    #[test]
+    fn multipart_rar() {
+        assert!(is_rar_multipart("backup.part1.rar"));
+        assert!(is_rar_multipart("backup.part99.rar"));
+        assert!(!is_rar_multipart("backup.rar"));           // sin .part
+        assert!(!is_rar_multipart("backup.part1.zip"));     // extensión distinta
+    }
+
+    // ── ScanStats::total_indexed ──────────────────────────────────────────
+
+    #[test]
+    fn total_indexed_suma_todos_los_tipos() {
+        let s = ScanStats {
+            indexed_3d:    1,
+            indexed_video: 2,
+            indexed_audio: 3,
+            indexed_image: 4,
+            indexed_other: 5,
+            ..Default::default()
+        };
+        assert_eq!(s.total_indexed(), 15);
+    }
+
+    #[test]
+    fn total_indexed_vacio_es_cero() {
+        assert_eq!(ScanStats::default().total_indexed(), 0);
+    }
+}
