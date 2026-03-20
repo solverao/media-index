@@ -3,6 +3,7 @@ name = "media-index"
 version = "0.1.0"
 edition = "2024"
 description = "Indexador y deduplicador de archivos 3D, video, audio e imagen"
+license = "MIT"
 
 [dependencies]
 # CLI
