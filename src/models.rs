@@ -69,10 +69,10 @@ pub struct MediaEntry {
     /// Origin if the file came from an archive
     pub source_archive:  Option<String>,
     pub path_in_archive: Option<String>,
-    /// Timestamp de última modificación (unix seconds). None para entradas de comprimidos.
+    /// Last modification timestamp (unix seconds). None for entries inside archives.
     pub mtime:           Option<u64>,
-    /// true si esta entry se construyó desde caché (mtime+size coinciden con BD).
-    /// El scanner la pasa a insert() igualmente para actualizar mtime si cambió.
+    /// true if this entry was built from cache (mtime+size matched the DB record).
+    /// The scanner still passes it to insert() so that mtime can be updated if needed.
     #[serde(default)]
     pub from_cache:      bool,
 }
@@ -150,7 +150,7 @@ pub struct MetaImage {
     pub gps_lon:      Option<f64>,
     pub iso:          Option<u32>,
     pub focal_length: Option<f64>,
-    /// Perceptual hash (dHash 8×8, 16-char hex). None si el formato no es soportado.
+    /// Perceptual hash (dHash 8×8, 16-char hex). None if the format is not supported.
     pub phash:        Option<String>,
 }
 
@@ -188,7 +188,7 @@ pub fn is_rar_multipart(name: &str) -> bool {
     name.contains(".part") && name.ends_with(".rar")
 }
 
-// ── Imágenes similares (feature #1 + #2) ─────────────────────────────────
+// ── Similar images ────────────────────────────────────────────────────────
 
 pub struct SimilarImageGroup {
     pub files: Vec<SimilarImageEntry>,
@@ -202,7 +202,7 @@ pub struct SimilarImageEntry {
     pub phash:  String,
 }
 
-// ── Audio similar (feature #3) ────────────────────────────────────────────
+// ── Similar audio ─────────────────────────────────────────────────────────
 
 pub struct SimilarAudioGroup {
     pub title:  String,
@@ -217,7 +217,7 @@ pub struct SimilarAudioEntry {
     pub album:         Option<String>,
 }
 
-// ── Regla de conservación al borrar duplicados (feature #6) ───────────────
+// ── Keep rule for duplicate deletion ──────────────────────────────────────
 
 #[derive(Clone, Debug)]
 pub enum KeepRule { Oldest, Newest, Largest, Smallest, ShortestPath }

@@ -4,9 +4,8 @@ pub fn parse(data: &[u8]) -> MetaImage {
     let mut meta = MetaImage::default();
 
     // ── Perceptual hash (dHash 8×8) ───────────────────────────────────────
-    // Se calcula antes de decodificar dimensiones para reutilizar la imagen
-    // ya decodificada. Falla silenciosamente para formatos no soportados
-    // (HEIC, RAW, etc.) — meta.phash queda None.
+    // Computed before decoding dimensions to reuse the already-decoded image.
+    // Fails silently for unsupported formats (HEIC, RAW, etc.) — meta.phash stays None.
     meta.phash = compute_phash(data);
 
     // ── Dimensions ────────────────────────────────────────────────────────
@@ -27,8 +26,8 @@ pub fn parse(data: &[u8]) -> MetaImage {
     meta
 }
 
-/// Calcula un perceptual hash dHash 8×8 (64 bits → 16 chars hex).
-/// Devuelve None si el formato no puede decodificarse.
+/// Computes a dHash 8×8 perceptual hash (64 bits → 16-char hex).
+/// Returns None if the format cannot be decoded.
 fn compute_phash(data: &[u8]) -> Option<String> {
     use image_hasher::{HasherConfig, HashAlg};
 

@@ -36,8 +36,8 @@ fn is_macos_junk(name: &str) -> bool {
     false
 }
 
-/// Número máximo de entradas a leer de un solo comprimido.
-/// Evita congelar el scanner con ZIPs que contienen decenas de miles de archivos.
+/// Maximum number of entries to read from a single archive.
+/// Prevents freezing the scanner on ZIPs that contain tens of thousands of files.
 const MAX_ARCHIVE_ENTRIES: usize = 5_000;
 
 fn extract_zip(path: &Path) -> Result<Vec<ExtractedFile>> {
@@ -81,7 +81,7 @@ fn extract_7z(path: &Path) -> Result<Vec<ExtractedFile>> {
         if is_macos_junk(&name) { return Ok(true); }
         let ext = ext_of(&name);
 
-        // Filtrar antes de leer
+        // Skip oversized entries before reading
         if entry.size() > MAX_IN_MEMORY { return Ok(true); }
         let mut data = Vec::with_capacity(entry.size() as usize);
         if std::io::copy(reader, &mut data).is_ok() {

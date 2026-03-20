@@ -201,10 +201,10 @@ impl Scanner {
         let size     = meta.len();
         let path_str = path.to_string_lossy().to_string();
 
-        // ── Re-scan incremental: comprobar caché por mtime + size ─────────
-        // Si el archivo ya está indexado y ni el tamaño ni el timestamp de
-        // modificación cambiaron, reutilizamos el hash cacheado sin leer
-        // el archivo — ahorra I/O en re-scans y permite reanudar tras interrupciones.
+        // ── Incremental re-scan: check cache by mtime + size ─────────────
+        // If the file is already indexed and neither size nor modification
+        // timestamp changed, reuse the cached hash without reading the file —
+        // saves I/O on re-scans and allows resuming after interruptions.
         let current_mtime = meta.modified()
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
@@ -214,7 +214,7 @@ impl Scanner {
             let cached = self.db.lock().unwrap().find_by_path(&path_str);
             if let Some(c) = cached {
                 if c.size_bytes == size && c.mtime == Some(mtime) {
-                    // Sin cambios — devolver entry con hash cacheado
+                    // No changes — return entry with cached hash
                     let name = path.file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default();
@@ -225,7 +225,7 @@ impl Scanner {
                         current_path:    path_str,
                         extension:       ext.to_string(),
                         media_type:      media_type.clone(),
-                        metadata:        Metadata::None, // ya está en la BD
+                        metadata:        Metadata::None, // already stored in DB
                         source_archive:  None,
                         path_in_archive: None,
                         mtime:           Some(mtime),
@@ -235,7 +235,7 @@ impl Scanner {
             }
         }
 
-        // ── Archivo nuevo o modificado: hashear y parsear ─────────────────
+        // ── New or modified file: hash and parse ─────────────────────────
         let hash = hash_file(path, size)?;
         let name = path.file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -282,7 +282,7 @@ impl Scanner {
 
         match self.db.lock().unwrap().insert(&entry) {
             Ok(_) if from_cache => {
-                // Re-scan incremental: mtime+size coincidían → sin I/O de hash.
+                // Incremental re-scan: mtime+size matched → no hash I/O needed.
                 stats.skipped_cached += 1;
             }
             Ok((_, true, Some(orig))) => {

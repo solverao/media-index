@@ -32,7 +32,7 @@ impl Database {
                 media_type      TEXT    NOT NULL,  -- 3d | video | audio | image
                 source_archive  TEXT,
                 path_in_archive TEXT,
-                mtime           INTEGER,           -- unix timestamp, para re-scan incremental
+                mtime           INTEGER,           -- unix timestamp, for incremental re-scan
                 indexed_at      TEXT    NOT NULL DEFAULT (datetime('now'))
             );
 
@@ -115,13 +115,13 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_image_phash     ON meta_image(phash);
         ")?;
 
-        // Migración para DBs existentes: agrega phash si la columna no existe.
-        // ALTER TABLE falla silenciosamente si la columna ya existe.
+        // Migration for existing DBs: add phash if the column does not exist.
+        // ALTER TABLE fails silently if the column already exists.
         let _ = self.conn.execute("ALTER TABLE meta_image ADD COLUMN phash TEXT", []);
         let _ = self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_image_phash ON meta_image(phash)", []
         );
-        // Migración: agrega mtime si no existe
+        // Migration: add mtime if it does not exist
         let _ = self.conn.execute("ALTER TABLE files ADD COLUMN mtime INTEGER", []);
         let _ = self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_files_path ON files(current_path)", []
@@ -232,10 +232,10 @@ impl Database {
         Ok((file_id, false, None))
     }
 
-    /// Busca un archivo ya indexado por su path exacto.
-    /// Devuelve (blake3_hash, size_bytes, mtime) si existe.
-    /// Usado por el scanner para el re-scan incremental: si mtime + size no
-    /// cambiaron, el archivo no fue modificado y podemos reusar el hash cacheado.
+    /// Looks up an already-indexed file by its exact path.
+    /// Returns (blake3_hash, size_bytes, mtime) if found.
+    /// Used by the scanner for incremental re-scan: if mtime + size have not
+    /// changed, the file was not modified and we can reuse the cached hash.
     pub fn find_by_path(&self, path: &str) -> Option<CachedFile> {
         self.conn.query_row(
             "SELECT blake3_hash, size_bytes, mtime FROM files WHERE current_path = ?1",
@@ -651,10 +651,10 @@ impl Database {
         Ok(results)
     }
 
-    // ── Similitud perceptual ──────────────────────────────────────────────
+    // ── Perceptual similarity ─────────────────────────────────────────────
 
-    /// Agrupa imágenes por distancia Hamming de su phash.
-    /// threshold: 0 = idéntico, ≤10 = muy similar, ≤20 = similar.
+    /// Groups images by Hamming distance of their phash.
+    /// threshold: 0 = identical, ≤10 = very similar, ≤20 = similar.
     pub fn similar_images(&self, threshold: u32) -> Result<Vec<crate::models::SimilarImageGroup>> {
         use crate::models::{SimilarImageGroup, SimilarImageEntry};
 
@@ -675,7 +675,7 @@ impl Database {
         let n = rows.len();
         if n < 2 { return Ok(vec![]); }
 
-        // Union-Find para agrupar por similitud
+        // Union-Find to group by similarity
         let mut parent: Vec<usize> = (0..n).collect();
         for i in 0..n {
             for j in (i+1)..n {
@@ -706,7 +706,7 @@ impl Database {
             .collect())
     }
 
-    /// Agrupa canciones con mismo título + artista (normalizado a lowercase).
+    /// Groups songs with the same title + artist (normalized to lowercase).
     pub fn similar_audio(&self) -> Result<Vec<crate::models::SimilarAudioGroup>> {
         use crate::models::{SimilarAudioGroup, SimilarAudioEntry};
 
@@ -744,7 +744,7 @@ impl Database {
     }
 }
 
-// ── Helpers privados de similitud ─────────────────────────────────────────
+// ── Private similarity helpers ────────────────────────────────────────────
 
 fn uf_find(parent: &mut Vec<usize>, mut x: usize) -> usize {
     while parent[x] != x {
@@ -754,7 +754,7 @@ fn uf_find(parent: &mut Vec<usize>, mut x: usize) -> usize {
     x
 }
 
-/// Distancia Hamming entre dos phashes en hex. Retorna None si los strings son inválidos.
+/// Hamming distance between two hex-encoded phashes. Returns None if either string is invalid.
 fn phash_distance(a: &str, b: &str) -> Option<u32> {
     if a.len() != b.len() || a.len() % 2 != 0 { return None; }
     let decode = |s: &str| -> Option<Vec<u8>> {
@@ -1042,7 +1042,7 @@ mod tests {
         db.insert(&entry("h2", "/normal.jpg", "normal.jpg")).unwrap();
         let removed = db.purge_macos_junk().unwrap();
         assert!(removed >= 1);
-        assert_eq!(db.stats().unwrap().total, 1); // solo queda el normal
+        assert_eq!(db.stats().unwrap().total, 1); // only the normal file remains
     }
 
     #[test]

@@ -39,8 +39,8 @@ enum Commands {
         path: PathBuf,
         #[arg(short, long)]
         verbose: bool,
-        /// No abrir comprimidos (.zip, .rar, .7z): indexa solo archivos sueltos.
-        /// Los comprimidos se registran como archivos normales (se hashea el archivo en sí).
+        /// Do not open archives (.zip, .rar, .7z): index only loose files.
+        /// Compressed files are registered as regular files (the archive itself is hashed).
         #[arg(long)]
         no_archives: bool,
     },
@@ -53,7 +53,7 @@ enum Commands {
         /// Seconds to wait before processing an event (default: 2)
         #[arg(short, long, default_value = "2")]
         debounce: u64,
-        /// No abrir comprimidos (.zip, .rar, .7z): indexa solo archivos sueltos.
+        /// Do not open archives (.zip, .rar, .7z): index only loose files.
         #[arg(long)]
         no_archives: bool,
     },
@@ -269,7 +269,7 @@ fn cmd_scan(db: Database, path: &std::path::Path, verbose: bool, no_archives: bo
     println!("  {} duplicates ({})", s.duplicates.to_string().red().bold(),
         format_size(s.bytes_dup, DECIMAL).red());
     if s.skipped_cached > 0 {
-        println!("  {} sin cambios (caché)",
+        println!("  {} unchanged (cached)",
             s.skipped_cached.to_string().dimmed());
     }
     if s.errors > 0 {
@@ -308,7 +308,7 @@ fn cmd_watch(db: Database, path: &std::path::Path, verbose: bool, debounce_secs:
     println!("{}", format!("Initial scan: {}", path.display()).bold().cyan());
     let scanner = Scanner::new(db, verbose, no_archives);
     let s = scanner.scan(path)?;
-    println!("  {} indexados  {} duplicados\n",
+    println!("  {} indexed  {} duplicates\n",
         s.total_indexed().to_string().cyan().bold(),
         s.duplicates.to_string().red());
 
@@ -419,7 +419,7 @@ fn cmd_dupes(
         Some(s) => match KeepRule::from_str(s) {
             Some(r) => Some(r),
             None    => {
-                eprintln!("{} Regla desconocida: '{}'. Opciones: oldest|newest|largest|smallest|shortest-path",
+                eprintln!("{} Unknown rule: '{}'. Options: oldest|newest|largest|smallest|shortest-path",
                     "✗".red(), s);
                 return Ok(());
             }
@@ -506,24 +506,24 @@ fn cmd_dupes_delete(
     }
 
     if let Some(rule) = keep_rule {
-        println!("  {} Usando regla de conservación: {:?}\n", "→".cyan(), rule);
+        println!("  {} Using keep rule: {:?}\n", "→".cyan(), rule);
     }
 
-    // ── Aplicar KeepRule: recalcular qué paths son "duplicados" en cada grupo ──
-    // Cuando el usuario pasa --keep, ignoramos el canonical/duplicate de la BD
-    // y elegimos nosotros quién se queda, convirtiendo los demás en "a borrar".
+    // ── Apply KeepRule: recalculate which paths are "duplicates" in each group ──
+    // When the user passes --keep, we ignore the canonical/duplicate split from
+    // the DB and decide ourselves who survives, marking the rest for deletion.
     let plans_from_keep: Option<Vec<String>> = keep_rule.map(|rule| {
         let mut to_delete: Vec<String> = vec![];
         for g in groups {
-            // Construir lista completa del grupo: canonical + duplicates
+            // Build the full group list: canonical + duplicates
             let mut all: Vec<String> = vec![g.canonical_path.clone()];
             all.extend(g.duplicates.iter().cloned());
-            // Filtrar solo los archivos sueltos (no dentro de archivos comprimidos)
-            // para poder leer sus metadatos del filesystem
+            // Keep only loose files (not inside archives) so we can read
+            // their filesystem metadata
             let loose: Vec<&String> = all.iter().filter(|p| !p.contains("::")).collect();
             if loose.is_empty() { continue; }
 
-            // Elegir el ganador según la regla
+            // Choose the winner according to the rule
             let winner = match rule {
                 models::KeepRule::Oldest => loose.iter().min_by_key(|p| {
                     std::fs::metadata(p).and_then(|m| m.modified()).ok()
@@ -541,7 +541,7 @@ fn cmd_dupes_delete(
             };
 
             if let Some(keep_path) = winner {
-                // Marcar todos los demás como a borrar
+                // Mark all others for deletion
                 for p in &all {
                     if p != *keep_path && !p.contains("::") {
                         to_delete.push(p.clone());
@@ -558,7 +558,7 @@ fn cmd_dupes_delete(
         archive_path: Option<String>, // Some("/a/b.zip") if "b.zip::foo.jpg"
     }
 
-    // Si hay KeepRule, los planes vienen de ahí. Si no, de los duplicates normales.
+    // If a KeepRule was given, plans come from it. Otherwise, use the normal duplicates.
     let plans: Vec<DeletePlan> = match &plans_from_keep {
         Some(paths) => paths.iter().map(|p| DeletePlan {
             path: p.clone(),
@@ -1338,7 +1338,7 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
     Ok(())
 }
 
-// ── Feature #1/#2: imágenes similares / audio similar ────────────────────
+// ── Similar images / similar audio ───────────────────────────────────────
 
 fn cmd_similar(db: Database, kind: SimilarKind, threshold: u32, as_json: bool) -> Result<()> {
     match kind {
@@ -1417,7 +1417,7 @@ fn cmd_similar(db: Database, kind: SimilarKind, threshold: u32, as_json: bool) -
     Ok(())
 }
 
-// ── Feature #4: archivos y carpetas vacíos ───────────────────────────────
+// ── Empty files and directories ───────────────────────────────────────────
 
 fn cmd_empty(
     root:       &std::path::Path,
@@ -1530,9 +1530,9 @@ fn cmd_broken(
         let path = entry.path();
         if !entry.path_is_symlink() { continue; }
 
-        // Un symlink está roto si su target no existe
+        // A symlink is broken if its target does not exist
         let target = std::fs::read_link(path).unwrap_or_default();
-        let broken  = !path.exists(); // exists() sigue el link; false = roto
+        let broken  = !path.exists(); // exists() follows the link; false = broken
 
         if !broken { continue; }
 
