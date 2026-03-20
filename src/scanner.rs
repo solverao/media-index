@@ -197,10 +197,47 @@ impl Scanner {
         ext:        &str,
         media_type: &MediaType,
     ) -> Result<MediaEntry> {
-        let size     = std::fs::metadata(path)?.len();
-        let hash     = hash_file(path, size)?;
+        let meta     = std::fs::metadata(path)?;
+        let size     = meta.len();
         let path_str = path.to_string_lossy().to_string();
-        let name     = path.file_name()
+
+        // ── Re-scan incremental: comprobar caché por mtime + size ─────────
+        // Si el archivo ya está indexado y ni el tamaño ni el timestamp de
+        // modificación cambiaron, reutilizamos el hash cacheado sin leer
+        // el archivo — ahorra I/O en re-scans y permite reanudar tras interrupciones.
+        let current_mtime = meta.modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs());
+
+        if let Some(mtime) = current_mtime {
+            let cached = self.db.lock().unwrap().find_by_path(&path_str);
+            if let Some(c) = cached {
+                if c.size_bytes == size && c.mtime == Some(mtime) {
+                    // Sin cambios — devolver entry con hash cacheado
+                    let name = path.file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    return Ok(MediaEntry {
+                        blake3_hash:     c.blake3_hash,
+                        size_bytes:      size,
+                        original_name:   name,
+                        current_path:    path_str,
+                        extension:       ext.to_string(),
+                        media_type:      media_type.clone(),
+                        metadata:        Metadata::None, // ya está en la BD
+                        source_archive:  None,
+                        path_in_archive: None,
+                        mtime:           Some(mtime),
+                        from_cache:      true,
+                    });
+                }
+            }
+        }
+
+        // ── Archivo nuevo o modificado: hashear y parsear ─────────────────
+        let hash = hash_file(path, size)?;
+        let name = path.file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
 
@@ -229,19 +266,25 @@ impl Scanner {
             metadata,
             source_archive:  None,
             path_in_archive: None,
+            mtime:           current_mtime,
+            from_cache:      false,
         })
     }
 
     // ── Insert into DB + update stats (fast, under lock) ─────────────────
 
     fn insert_entry(&self, entry: MediaEntry, stats: &mut ScanStats) {
-        let media_type = entry.media_type.clone();
-        let size = entry.size_bytes;
-        let path = entry.current_path.clone();
-        // Large loose files use partial hash — track for the warning
-        let is_partial = entry.source_archive.is_none() && size > PARTIAL_HASH_THRESHOLD;
+        let media_type  = entry.media_type.clone();
+        let size        = entry.size_bytes;
+        let path        = entry.current_path.clone();
+        let from_cache  = entry.from_cache;
+        let is_partial  = entry.source_archive.is_none() && size > PARTIAL_HASH_THRESHOLD;
 
         match self.db.lock().unwrap().insert(&entry) {
+            Ok(_) if from_cache => {
+                // Re-scan incremental: mtime+size coincidían → sin I/O de hash.
+                stats.skipped_cached += 1;
+            }
             Ok((_, true, Some(orig))) => {
                 stats.duplicates += 1;
                 stats.bytes_dup  += size;
@@ -367,6 +410,8 @@ fn build_entry_from_memory(
         metadata,
         source_archive:  Some(archive_path.to_string()),
         path_in_archive: Some(name.to_string()),
+        mtime:           None,
+        from_cache:      false,
     }
 }
 

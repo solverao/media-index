@@ -268,6 +268,10 @@ fn cmd_scan(db: Database, path: &std::path::Path, verbose: bool, no_archives: bo
     println!("  {} archives",   s.archives_opened.to_string().dimmed());
     println!("  {} duplicates ({})", s.duplicates.to_string().red().bold(),
         format_size(s.bytes_dup, DECIMAL).red());
+    if s.skipped_cached > 0 {
+        println!("  {} sin cambios (caché)",
+            s.skipped_cached.to_string().dimmed());
+    }
     if s.errors > 0 {
         println!("  {} errors", s.errors.to_string().red());
     }

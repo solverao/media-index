@@ -18,6 +18,8 @@ Indexador y deduplicador de archivos multimedia escrito en Rust. Escanea directo
 - **Similitud perceptual** — detecta imágenes visualmente similares por dHash y audio duplicado por etiquetas
 - **Archivos y carpetas vacíos** — localiza y elimina entradas vacías del sistema de ficheros
 - **Symlinks rotos** — detecta y limpia enlaces simbólicos que apuntan a rutas inexistentes
+- **Re-scan incremental** — si `mtime` y tamaño no cambiaron, reutiliza el hash cacheado sin leer el archivo (re-escaneos instantáneos en colecciones grandes)
+- **Límite de entradas en comprimidos** — máximo 5 000 entradas por archivo para evitar congelar el scanner con ZIPs de decenas de miles de ficheros
 - **Paralelismo** con rayon para escaneos rápidos en colecciones grandes
 
 ---
@@ -125,6 +127,8 @@ media-index scan <PATH> [--verbose] [--no-archives]
 | `-v, --verbose` | Mostrar cada archivo procesado y los duplicados encontrados |
 | `--no-archives` | No abrir comprimidos: los `.zip`, `.rar` y `.7z` se indexan como archivos normales (se hashea el archivo en sí, no su contenido) |
 
+> Al abrir comprimidos, se procesan como máximo **5 000 entradas** por archivo. Si un ZIP tiene más, las entradas restantes se omiten silenciosamente. Usa `--no-archives` para indexar esos archivos como una unidad sin límite.
+
 **Ejemplo:**
 
 ```bash
@@ -147,6 +151,7 @@ Escaneando: /home/usuario/Pictures
   16 otros
   4 comprimidos
   23 duplicados (1.2 GB)
+  1200 sin cambios (caché)
   ──────────────────────────────────────
   1842 indexados en total
 
@@ -155,6 +160,8 @@ Escaneando: /home/usuario/Pictures
 ```
 
 > Si hay archivos grandes (> 100 MB), el escaneo usa hash parcial para mayor velocidad. El aviso al final sugiere ejecutar `verify` si necesitas confirmación exacta.
+
+> En re-escaneos, la línea `N sin cambios (caché)` muestra cuántos archivos se saltaron porque su `mtime` y tamaño coincidían con la BD — no se leyó ni hasheó su contenido. Aparece solo si hay al menos uno.
 
 ---
 
@@ -732,6 +739,7 @@ El índice se guarda en SQLite con WAL mode. El esquema principal:
 
 ```
 files           — un registro por contenido único (hash BLAKE3)
+                  incluye mtime (unix timestamp) para re-scan incremental
 duplicates      — paths adicionales con el mismo contenido
 meta_image      — metadatos EXIF de imágenes + phash perceptual (dHash 8×8)
 meta_audio      — tags ID3/Vorbis/etc de audio
@@ -739,7 +747,7 @@ meta_video      — metadatos de video vía ffprobe
 meta_3d         — geometría de modelos 3D (triángulos, vértices, dimensiones)
 ```
 
-La columna `phash` en `meta_image` se agrega automáticamente como migración en bases de datos existentes. Re-escanea para poblar los valores en archivos ya indexados.
+La columna `phash` en `meta_image` y la columna `mtime` en `files` se agregan automáticamente como migraciones en bases de datos existentes. Re-escanea para poblar los valores en archivos ya indexados.
 
 ### Deduplicación
 

@@ -32,6 +32,7 @@ impl Database {
                 media_type      TEXT    NOT NULL,  -- 3d | video | audio | image
                 source_archive  TEXT,
                 path_in_archive TEXT,
+                mtime           INTEGER,           -- unix timestamp, para re-scan incremental
                 indexed_at      TEXT    NOT NULL DEFAULT (datetime('now'))
             );
 
@@ -120,6 +121,11 @@ impl Database {
         let _ = self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_image_phash ON meta_image(phash)", []
         );
+        // Migración: agrega mtime si no existe
+        let _ = self.conn.execute("ALTER TABLE files ADD COLUMN mtime INTEGER", []);
+        let _ = self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_files_path ON files(current_path)", []
+        );
 
         Ok(())
     }
@@ -197,8 +203,8 @@ impl Database {
         self.conn.execute(
             "INSERT INTO files
              (blake3_hash, size_bytes, original_name, current_path, extension,
-              media_type, source_archive, path_in_archive)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+              media_type, source_archive, path_in_archive, mtime)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
             params![
                 entry.blake3_hash,
                 entry.size_bytes,
@@ -208,6 +214,7 @@ impl Database {
                 entry.media_type.as_str(),
                 entry.source_archive,
                 entry.path_in_archive,
+                entry.mtime,
             ],
         )?;
 
@@ -223,6 +230,22 @@ impl Database {
         }
 
         Ok((file_id, false, None))
+    }
+
+    /// Busca un archivo ya indexado por su path exacto.
+    /// Devuelve (blake3_hash, size_bytes, mtime) si existe.
+    /// Usado por el scanner para el re-scan incremental: si mtime + size no
+    /// cambiaron, el archivo no fue modificado y podemos reusar el hash cacheado.
+    pub fn find_by_path(&self, path: &str) -> Option<CachedFile> {
+        self.conn.query_row(
+            "SELECT blake3_hash, size_bytes, mtime FROM files WHERE current_path = ?1",
+            params![path],
+            |r| Ok(CachedFile {
+                blake3_hash: r.get(0)?,
+                size_bytes:  r.get::<_, i64>(1)? as u64,
+                mtime:       r.get::<_, Option<i64>>(2)?.map(|v| v as u64),
+            }),
+        ).ok()
     }
 
     fn insert_meta_3d(&self, id: i64, m: &Meta3D) -> Result<()> {
@@ -744,6 +767,12 @@ fn phash_distance(a: &str, b: &str) -> Option<u32> {
     Some(ab.iter().zip(bb.iter()).map(|(x, y)| (x ^ y).count_ones()).sum())
 }
 
+pub struct CachedFile {
+    pub blake3_hash: String,
+    pub size_bytes:  u64,
+    pub mtime:       Option<u64>,
+}
+
 pub struct DbStats {
     pub total:    i64,
     pub dupes:    i64,
@@ -800,6 +829,8 @@ mod tests {
             metadata:        Metadata::None,
             source_archive:  None,
             path_in_archive: None,
+            mtime:           None,
+            from_cache:      false,
         }
     }
 

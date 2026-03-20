@@ -36,21 +36,30 @@ fn is_macos_junk(name: &str) -> bool {
     false
 }
 
+/// Número máximo de entradas a leer de un solo comprimido.
+/// Evita congelar el scanner con ZIPs que contienen decenas de miles de archivos.
+const MAX_ARCHIVE_ENTRIES: usize = 5_000;
+
 fn extract_zip(path: &Path) -> Result<Vec<ExtractedFile>> {
     let file = std::fs::File::open(path)?;
     let mut archive = zip::ZipArchive::new(file)?;
     let mut results = vec![];
+    let mut entries_read = 0usize;
 
     for i in 0..archive.len() {
+        if entries_read >= MAX_ARCHIVE_ENTRIES { break; }
+
         let mut entry = match archive.by_index(i) {
             Ok(e) => e, Err(_) => continue,
         };
         if entry.is_dir() { continue; }
         let name = entry.name().to_string();
         if is_macos_junk(&name) { continue; }
-        let ext  = ext_of(&name);
+        let ext = ext_of(&name);
+
         if entry.size() > MAX_IN_MEMORY { continue; }
 
+        entries_read += 1;
         let mut data = Vec::with_capacity(entry.size() as usize);
         if std::io::copy(&mut entry, &mut data).is_err() { continue; }
         results.push(ExtractedFile { name, data, ext });
@@ -63,16 +72,21 @@ fn extract_7z(path: &Path) -> Result<Vec<ExtractedFile>> {
 
     let mut archive = SevenZReader::open(path, sevenz_rust::Password::empty())?;
     let mut results = vec![];
+    let mut entries_read = 0usize;
 
     archive.for_each_entries(|entry, reader| {
         if entry.is_directory() { return Ok(true); }
+        if entries_read >= MAX_ARCHIVE_ENTRIES { return Ok(false); }
         let name = entry.name().to_string();
         if is_macos_junk(&name) { return Ok(true); }
-        let ext  = ext_of(&name);
+        let ext = ext_of(&name);
+
+        // Filtrar antes de leer
         if entry.size() > MAX_IN_MEMORY { return Ok(true); }
         let mut data = Vec::with_capacity(entry.size() as usize);
         if std::io::copy(reader, &mut data).is_ok() {
             results.push(ExtractedFile { name, data, ext });
+            entries_read += 1;
         }
         Ok(true)
     })?;
@@ -118,11 +132,12 @@ fn extract_rar(path: &Path) -> Result<Vec<ExtractedFile>> {
         .status()?;
 
     let mut results = vec![];
+    let mut entries_read = 0usize;
 
     for entry in walkdir::WalkDir::new(&tmp).into_iter().flatten() {
+        if entries_read >= MAX_ARCHIVE_ENTRIES { break; }
         if !entry.file_type().is_file() { continue; }
 
-        // Get the relative path to evaluate __MACOSX and ._
         let rel = entry.path()
             .strip_prefix(&tmp)
             .map(|p| p.to_string_lossy().replace('\\', "/"))
@@ -138,6 +153,7 @@ fn extract_rar(path: &Path) -> Result<Vec<ExtractedFile>> {
 
         if let Ok(data) = std::fs::read(entry.path()) {
             results.push(ExtractedFile { name, data, ext });
+            entries_read += 1;
         }
     }
 

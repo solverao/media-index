@@ -69,6 +69,12 @@ pub struct MediaEntry {
     /// Origin if the file came from an archive
     pub source_archive:  Option<String>,
     pub path_in_archive: Option<String>,
+    /// Timestamp de última modificación (unix seconds). None para entradas de comprimidos.
+    pub mtime:           Option<u64>,
+    /// true si esta entry se construyó desde caché (mtime+size coinciden con BD).
+    /// El scanner la pasa a insert() igualmente para actualizar mtime si cambió.
+    #[serde(default)]
+    pub from_cache:      bool,
 }
 
 // ── Per-type metadata ─────────────────────────────────────────────────────
@@ -245,6 +251,8 @@ pub struct ScanStats {
     /// Files hashed partially because they exceeded the size threshold.
     /// Deduplication is approximate for these — see verify.
     pub partial_hashes:  usize,
+    /// Files skipped because mtime+size matched the DB cache (re-scan incremental).
+    pub skipped_cached:  usize,
 }
 
 impl ScanStats {
