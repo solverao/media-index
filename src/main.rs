@@ -1,5 +1,6 @@
 mod archive;
 mod db;
+mod gui;
 mod models;
 mod parsers;
 mod scanner;
@@ -29,7 +30,7 @@ struct Cli {
     db: String,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -208,14 +209,20 @@ enum SimilarKind { Images, Audio }
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // No subcommand → launch the graphical interface
+    let command = match cli.command {
+        Some(c) => c,
+        None    => return gui::run(&cli.db),
+    };
+
     // Clear does not need to open (or create) the DB
-    if let Commands::Clear { force } = cli.command {
+    if let Commands::Clear { force } = command {
         return cmd_clear(&cli.db, force);
     }
 
     let db = Database::open(&cli.db)?;
 
-    match cli.command {
+    match command {
         Commands::Scan { path, verbose, no_archives }  => cmd_scan(db, &path, verbose, no_archives),
         Commands::Watch { path, verbose, debounce, no_archives } => cmd_watch(db, &path, verbose, debounce, no_archives),
         Commands::Stats                   => cmd_stats(db),
