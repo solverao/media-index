@@ -15,20 +15,20 @@ impl MediaType {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Print3D => "3d",
-            Self::Video   => "video",
-            Self::Audio   => "audio",
-            Self::Image   => "image",
-            Self::Other   => "other",
+            Self::Video => "video",
+            Self::Audio => "audio",
+            Self::Image => "image",
+            Self::Other => "other",
         }
     }
 
     pub fn from_str(s: &str) -> Self {
         match s {
-            "3d"    => Self::Print3D,
+            "3d" => Self::Print3D,
             "video" => Self::Video,
             "audio" => Self::Audio,
             "image" => Self::Image,
-            _       => Self::Other,
+            _ => Self::Other,
         }
     }
 
@@ -38,17 +38,15 @@ impl MediaType {
             // 3D
             "stl" | "obj" | "3mf" => Some(Self::Print3D),
             // Video
-            "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm"
-            | "m4v" | "mpg" | "mpeg" | "ts" | "mts" | "m2ts" | "vob"
-            | "divx" | "xvid" | "rmvb" | "3gp" => Some(Self::Video),
+            "mp4" | "mkv" | "avi" | "mov" | "wmv" | "flv" | "webm" | "m4v" | "mpg" | "mpeg"
+            | "ts" | "mts" | "m2ts" | "vob" | "divx" | "xvid" | "rmvb" | "3gp" => Some(Self::Video),
             // Audio
-            "mp3" | "flac" | "ogg" | "opus" | "m4a" | "aac" | "wav"
-            | "aiff" | "aif" | "wma" | "ape" | "wv" | "mka" | "alac"
-            | "dsf" | "dff" => Some(Self::Audio),
+            "mp3" | "flac" | "ogg" | "opus" | "m4a" | "aac" | "wav" | "aiff" | "aif" | "wma"
+            | "ape" | "wv" | "mka" | "alac" | "dsf" | "dff" => Some(Self::Audio),
             // Image
-            "jpg" | "jpeg" | "png" | "webp" | "tiff" | "tif" | "bmp"
-            | "gif" | "avif" | "heic" | "heif" | "raw" | "cr2" | "cr3"
-            | "nef" | "arw" | "dng" | "orf" | "rw2" | "psd" | "xcf" => Some(Self::Image),
+            "jpg" | "jpeg" | "png" | "webp" | "tiff" | "tif" | "bmp" | "gif" | "avif" | "heic"
+            | "heif" | "raw" | "cr2" | "cr3" | "nef" | "arw" | "dng" | "orf" | "rw2" | "psd"
+            | "xcf" => Some(Self::Image),
             _ => None,
         }
     }
@@ -59,22 +57,22 @@ impl MediaType {
 /// An indexed file of any type
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MediaEntry {
-    pub blake3_hash:     String,
-    pub size_bytes:      u64,
-    pub original_name:   String,
-    pub current_path:    String,
-    pub extension:       String,
-    pub media_type:      MediaType,
-    pub metadata:        Metadata,
+    pub blake3_hash: String,
+    pub size_bytes: u64,
+    pub original_name: String,
+    pub current_path: String,
+    pub extension: String,
+    pub media_type: MediaType,
+    pub metadata: Metadata,
     /// Origin if the file came from an archive
-    pub source_archive:  Option<String>,
+    pub source_archive: Option<String>,
     pub path_in_archive: Option<String>,
     /// Last modification timestamp (unix seconds). None for entries inside archives.
-    pub mtime:           Option<u64>,
+    pub mtime: Option<u64>,
     /// true if this entry was built from cache (mtime+size matched the DB record).
     /// The scanner still passes it to insert() so that mtime can be updated if needed.
     #[serde(default)]
-    pub from_cache:      bool,
+    pub from_cache: bool,
 }
 
 // ── Per-type metadata ─────────────────────────────────────────────────────
@@ -92,66 +90,66 @@ pub enum Metadata {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Meta3D {
-    pub format:         String, // stl | obj | 3mf
+    pub format: String, // stl | obj | 3mf
     pub triangle_count: Option<u64>,
-    pub vertex_count:   Option<u64>,
-    pub object_count:   Option<u32>,
-    pub dim_x:          Option<f64>,
-    pub dim_y:          Option<f64>,
-    pub dim_z:          Option<f64>,
+    pub vertex_count: Option<u64>,
+    pub object_count: Option<u32>,
+    pub dim_x: Option<f64>,
+    pub dim_y: Option<f64>,
+    pub dim_z: Option<f64>,
 }
 
 // ── Video ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MetaVideo {
-    pub duration_secs:  Option<f64>,
-    pub width:          Option<u32>,
-    pub height:         Option<u32>,
-    pub codec_video:    Option<String>,
-    pub codec_audio:    Option<String>,
-    pub bitrate_kbps:   Option<u64>,
-    pub fps:            Option<f64>,
+    pub duration_secs: Option<f64>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub codec_video: Option<String>,
+    pub codec_audio: Option<String>,
+    pub bitrate_kbps: Option<u64>,
+    pub fps: Option<f64>,
     /// Embedded tags
-    pub title:          Option<String>,
-    pub year:           Option<u32>,
-    pub container:      Option<String>,
+    pub title: Option<String>,
+    pub year: Option<u32>,
+    pub container: Option<String>,
 }
 
 // ── Audio ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MetaAudio {
-    pub duration_secs:  Option<f64>,
-    pub bitrate_kbps:   Option<u32>,
+    pub duration_secs: Option<f64>,
+    pub bitrate_kbps: Option<u32>,
     pub sample_rate_hz: Option<u32>,
-    pub channels:       Option<u8>,
-    pub title:          Option<String>,
-    pub artist:         Option<String>,
-    pub album:          Option<String>,
-    pub year:           Option<u32>,
-    pub genre:          Option<String>,
-    pub track_number:   Option<u32>,
+    pub channels: Option<u8>,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub year: Option<u32>,
+    pub genre: Option<String>,
+    pub track_number: Option<u32>,
 }
 
 // ── Image ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MetaImage {
-    pub width:        Option<u32>,
-    pub height:       Option<u32>,
-    pub color_space:  Option<String>,
-    pub has_alpha:    Option<bool>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub color_space: Option<String>,
+    pub has_alpha: Option<bool>,
     // EXIF
-    pub camera_make:  Option<String>,
+    pub camera_make: Option<String>,
     pub camera_model: Option<String>,
-    pub taken_at:     Option<String>,
-    pub gps_lat:      Option<f64>,
-    pub gps_lon:      Option<f64>,
-    pub iso:          Option<u32>,
+    pub taken_at: Option<String>,
+    pub gps_lat: Option<f64>,
+    pub gps_lon: Option<f64>,
+    pub iso: Option<u32>,
     pub focal_length: Option<f64>,
     /// Perceptual hash (dHash 8×8, 16-char hex). None if the format is not supported.
-    pub phash:        Option<String>,
+    pub phash: Option<String>,
 }
 
 // ── Archives ──────────────────────────────────────────────────────────────
@@ -195,42 +193,48 @@ pub struct SimilarImageGroup {
 }
 
 pub struct SimilarImageEntry {
-    pub path:   String,
-    pub name:   String,
-    pub width:  Option<u32>,
+    pub path: String,
+    pub name: String,
+    pub width: Option<u32>,
     pub height: Option<u32>,
-    pub phash:  String,
+    pub phash: String,
 }
 
 // ── Similar audio ─────────────────────────────────────────────────────────
 
 pub struct SimilarAudioGroup {
-    pub title:  String,
+    pub title: String,
     pub artist: String,
-    pub files:  Vec<SimilarAudioEntry>,
+    pub files: Vec<SimilarAudioEntry>,
 }
 
 pub struct SimilarAudioEntry {
-    pub path:          String,
-    pub name:          String,
+    pub path: String,
+    pub name: String,
     pub duration_secs: Option<f64>,
-    pub album:         Option<String>,
+    pub album: Option<String>,
 }
 
 // ── Keep rule for duplicate deletion ──────────────────────────────────────
 
 #[derive(Clone, Debug)]
-pub enum KeepRule { Oldest, Newest, Largest, Smallest, ShortestPath }
+pub enum KeepRule {
+    Oldest,
+    Newest,
+    Largest,
+    Smallest,
+    ShortestPath,
+}
 
 impl KeepRule {
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "oldest"                     => Some(Self::Oldest),
-            "newest"                     => Some(Self::Newest),
-            "largest"                    => Some(Self::Largest),
-            "smallest"                   => Some(Self::Smallest),
+            "oldest" => Some(Self::Oldest),
+            "newest" => Some(Self::Newest),
+            "largest" => Some(Self::Largest),
+            "smallest" => Some(Self::Smallest),
             "shortest-path" | "shortest" => Some(Self::ShortestPath),
-            _                            => None,
+            _ => None,
         }
     }
 }
@@ -239,26 +243,29 @@ impl KeepRule {
 
 #[derive(Debug, Default)]
 pub struct ScanStats {
-    pub indexed_3d:      usize,
-    pub indexed_video:   usize,
-    pub indexed_audio:   usize,
-    pub indexed_image:   usize,
-    pub indexed_other:   usize,
+    pub indexed_3d: usize,
+    pub indexed_video: usize,
+    pub indexed_audio: usize,
+    pub indexed_image: usize,
+    pub indexed_other: usize,
     pub archives_opened: usize,
-    pub duplicates:      usize,
-    pub bytes_dup:       u64,
-    pub errors:          usize,
+    pub duplicates: usize,
+    pub bytes_dup: u64,
+    pub errors: usize,
     /// Files hashed partially because they exceeded the size threshold.
     /// Deduplication is approximate for these — see verify.
-    pub partial_hashes:  usize,
+    pub partial_hashes: usize,
     /// Files skipped because mtime+size matched the DB cache (re-scan incremental).
-    pub skipped_cached:  usize,
+    pub skipped_cached: usize,
 }
 
 impl ScanStats {
     pub fn total_indexed(&self) -> usize {
-        self.indexed_3d + self.indexed_video + self.indexed_audio
-            + self.indexed_image + self.indexed_other
+        self.indexed_3d
+            + self.indexed_video
+            + self.indexed_audio
+            + self.indexed_image
+            + self.indexed_other
     }
 }
 
@@ -271,30 +278,30 @@ mod tests {
 
     #[test]
     fn from_extension_image() {
-        assert_eq!(MediaType::from_extension("jpg"),  Some(MediaType::Image));
-        assert_eq!(MediaType::from_extension("JPG"),  Some(MediaType::Image));  // case insensitive
+        assert_eq!(MediaType::from_extension("jpg"), Some(MediaType::Image));
+        assert_eq!(MediaType::from_extension("JPG"), Some(MediaType::Image)); // case insensitive
         assert_eq!(MediaType::from_extension("jpeg"), Some(MediaType::Image));
-        assert_eq!(MediaType::from_extension("png"),  Some(MediaType::Image));
+        assert_eq!(MediaType::from_extension("png"), Some(MediaType::Image));
         assert_eq!(MediaType::from_extension("webp"), Some(MediaType::Image));
         assert_eq!(MediaType::from_extension("heic"), Some(MediaType::Image));
-        assert_eq!(MediaType::from_extension("cr2"),  Some(MediaType::Image));
+        assert_eq!(MediaType::from_extension("cr2"), Some(MediaType::Image));
     }
 
     #[test]
     fn from_extension_audio() {
-        assert_eq!(MediaType::from_extension("mp3"),  Some(MediaType::Audio));
+        assert_eq!(MediaType::from_extension("mp3"), Some(MediaType::Audio));
         assert_eq!(MediaType::from_extension("flac"), Some(MediaType::Audio));
-        assert_eq!(MediaType::from_extension("ogg"),  Some(MediaType::Audio));
-        assert_eq!(MediaType::from_extension("wav"),  Some(MediaType::Audio));
-        assert_eq!(MediaType::from_extension("m4a"),  Some(MediaType::Audio));
+        assert_eq!(MediaType::from_extension("ogg"), Some(MediaType::Audio));
+        assert_eq!(MediaType::from_extension("wav"), Some(MediaType::Audio));
+        assert_eq!(MediaType::from_extension("m4a"), Some(MediaType::Audio));
     }
 
     #[test]
     fn from_extension_video() {
-        assert_eq!(MediaType::from_extension("mp4"),  Some(MediaType::Video));
-        assert_eq!(MediaType::from_extension("mkv"),  Some(MediaType::Video));
-        assert_eq!(MediaType::from_extension("avi"),  Some(MediaType::Video));
-        assert_eq!(MediaType::from_extension("mov"),  Some(MediaType::Video));
+        assert_eq!(MediaType::from_extension("mp4"), Some(MediaType::Video));
+        assert_eq!(MediaType::from_extension("mkv"), Some(MediaType::Video));
+        assert_eq!(MediaType::from_extension("avi"), Some(MediaType::Video));
+        assert_eq!(MediaType::from_extension("mov"), Some(MediaType::Video));
         assert_eq!(MediaType::from_extension("webm"), Some(MediaType::Video));
     }
 
@@ -308,11 +315,11 @@ mod tests {
 
     #[test]
     fn from_extension_unknown_is_none() {
-        assert_eq!(MediaType::from_extension("txt"),  None);
-        assert_eq!(MediaType::from_extension("exe"),  None);
-        assert_eq!(MediaType::from_extension("pdf"),  None);
-        assert_eq!(MediaType::from_extension(""),     None);
-        assert_eq!(MediaType::from_extension("zip"),  None);
+        assert_eq!(MediaType::from_extension("txt"), None);
+        assert_eq!(MediaType::from_extension("exe"), None);
+        assert_eq!(MediaType::from_extension("pdf"), None);
+        assert_eq!(MediaType::from_extension(""), None);
+        assert_eq!(MediaType::from_extension("zip"), None);
     }
 
     // ── MediaType::as_str / from_str ─────────────────────────────────────
@@ -333,29 +340,53 @@ mod tests {
     #[test]
     fn from_str_unknown_is_other() {
         assert_eq!(MediaType::from_str("unknown"), MediaType::Other);
-        assert_eq!(MediaType::from_str(""),        MediaType::Other);
+        assert_eq!(MediaType::from_str(""), MediaType::Other);
     }
 
     // ── ArchiveType::from_path ────────────────────────────────────────────
 
     #[test]
     fn archive_type_zip() {
-        assert_eq!(ArchiveType::from_path(Path::new("archive.zip")), Some(ArchiveType::Zip));
-        assert_eq!(ArchiveType::from_path(Path::new("/path/to/file.ZIP")), Some(ArchiveType::Zip));
+        assert_eq!(
+            ArchiveType::from_path(Path::new("archive.zip")),
+            Some(ArchiveType::Zip)
+        );
+        assert_eq!(
+            ArchiveType::from_path(Path::new("/path/to/file.ZIP")),
+            Some(ArchiveType::Zip)
+        );
     }
 
     #[test]
     fn archive_type_7z() {
-        assert_eq!(ArchiveType::from_path(Path::new("archive.7z")),     Some(ArchiveType::SevenZip));
-        assert_eq!(ArchiveType::from_path(Path::new("archive.7z.001")), Some(ArchiveType::SevenZip));
-        assert_eq!(ArchiveType::from_path(Path::new("archive.7z.099")), Some(ArchiveType::SevenZip));
+        assert_eq!(
+            ArchiveType::from_path(Path::new("archive.7z")),
+            Some(ArchiveType::SevenZip)
+        );
+        assert_eq!(
+            ArchiveType::from_path(Path::new("archive.7z.001")),
+            Some(ArchiveType::SevenZip)
+        );
+        assert_eq!(
+            ArchiveType::from_path(Path::new("archive.7z.099")),
+            Some(ArchiveType::SevenZip)
+        );
     }
 
     #[test]
     fn archive_type_rar() {
-        assert_eq!(ArchiveType::from_path(Path::new("archive.rar")),        Some(ArchiveType::Rar));
-        assert_eq!(ArchiveType::from_path(Path::new("archive.part1.rar")),  Some(ArchiveType::Rar));
-        assert_eq!(ArchiveType::from_path(Path::new("archive.part10.rar")), Some(ArchiveType::Rar));
+        assert_eq!(
+            ArchiveType::from_path(Path::new("archive.rar")),
+            Some(ArchiveType::Rar)
+        );
+        assert_eq!(
+            ArchiveType::from_path(Path::new("archive.part1.rar")),
+            Some(ArchiveType::Rar)
+        );
+        assert_eq!(
+            ArchiveType::from_path(Path::new("archive.part10.rar")),
+            Some(ArchiveType::Rar)
+        );
     }
 
     #[test]
@@ -379,8 +410,8 @@ mod tests {
     fn multipart_rar() {
         assert!(is_rar_multipart("backup.part1.rar"));
         assert!(is_rar_multipart("backup.part99.rar"));
-        assert!(!is_rar_multipart("backup.rar"));        // no .part
-        assert!(!is_rar_multipart("backup.part1.zip"));  // different extension
+        assert!(!is_rar_multipart("backup.rar")); // no .part
+        assert!(!is_rar_multipart("backup.part1.zip")); // different extension
     }
 
     // ── ScanStats::total_indexed ──────────────────────────────────────────
@@ -388,7 +419,7 @@ mod tests {
     #[test]
     fn total_indexed_sums_all_types() {
         let s = ScanStats {
-            indexed_3d:    1,
+            indexed_3d: 1,
             indexed_video: 2,
             indexed_audio: 3,
             indexed_image: 4,

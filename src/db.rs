@@ -1,6 +1,6 @@
+use crate::models::*;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
-use crate::models::*;
 
 pub struct Database {
     conn: Connection,
@@ -8,15 +8,15 @@ pub struct Database {
 
 impl Database {
     pub fn open(path: &str) -> Result<Self> {
-        let conn = Connection::open(path)
-            .with_context(|| format!("Could not open DB: {path}"))?;
+        let conn = Connection::open(path).with_context(|| format!("Could not open DB: {path}"))?;
         let db = Self { conn };
         db.init_schema()?;
         Ok(db)
     }
 
     fn init_schema(&self) -> Result<()> {
-        self.conn.execute_batch("
+        self.conn.execute_batch(
+            "
             PRAGMA journal_mode = WAL;
             PRAGMA synchronous   = NORMAL;
             PRAGMA foreign_keys  = ON;
@@ -113,18 +113,25 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_audio_album     ON meta_audio(album);
             CREATE INDEX IF NOT EXISTS idx_video_title     ON meta_video(title);
             CREATE INDEX IF NOT EXISTS idx_image_phash     ON meta_image(phash);
-        ")?;
+        ",
+        )?;
 
         // Migration for existing DBs: add phash if the column does not exist.
         // ALTER TABLE fails silently if the column already exists.
-        let _ = self.conn.execute("ALTER TABLE meta_image ADD COLUMN phash TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE meta_image ADD COLUMN phash TEXT", []);
         let _ = self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_image_phash ON meta_image(phash)", []
+            "CREATE INDEX IF NOT EXISTS idx_image_phash ON meta_image(phash)",
+            [],
         );
         // Migration: add mtime if it does not exist
-        let _ = self.conn.execute("ALTER TABLE files ADD COLUMN mtime INTEGER", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE files ADD COLUMN mtime INTEGER", []);
         let _ = self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_files_path ON files(current_path)", []
+            "CREATE INDEX IF NOT EXISTS idx_files_path ON files(current_path)",
+            [],
         );
 
         Ok(())
@@ -135,11 +142,14 @@ impl Database {
     /// Returns (file_id, is_duplicate, canonical_path_if_duplicate)
     pub fn insert(&self, entry: &MediaEntry) -> Result<(i64, bool, Option<String>)> {
         // Already exists by hash?
-        let existing: Option<(i64, String)> = self.conn.query_row(
-            "SELECT id, current_path FROM files WHERE blake3_hash = ?1",
-            params![entry.blake3_hash],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        ).ok();
+        let existing: Option<(i64, String)> = self
+            .conn
+            .query_row(
+                "SELECT id, current_path FROM files WHERE blake3_hash = ?1",
+                params![entry.blake3_hash],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .ok();
 
         if let Some((canonical_id, canonical_path)) = existing {
             // Same path = re-scan, not a real duplicate
@@ -161,7 +171,7 @@ impl Database {
             // Is the newcomer more "original" than the current canonical?
             // If so, promote it: update current_path in files and register
             // the old canonical as a duplicate instead.
-            let incoming_score  = copy_score(&entry.current_path);
+            let incoming_score = copy_score(&entry.current_path);
             let canonical_score = copy_score(&canonical_path);
 
             if incoming_score < canonical_score {
@@ -223,10 +233,10 @@ impl Database {
         // Insert type-specific metadata
         match &entry.metadata {
             Metadata::Print3D(m) => self.insert_meta_3d(file_id, m)?,
-            Metadata::Video(m)   => self.insert_meta_video(file_id, m)?,
-            Metadata::Audio(m)   => self.insert_meta_audio(file_id, m)?,
-            Metadata::Image(m)   => self.insert_meta_image(file_id, m)?,
-            Metadata::None       => {}
+            Metadata::Video(m) => self.insert_meta_video(file_id, m)?,
+            Metadata::Audio(m) => self.insert_meta_audio(file_id, m)?,
+            Metadata::Image(m) => self.insert_meta_image(file_id, m)?,
+            Metadata::None => {}
         }
 
         Ok((file_id, false, None))
@@ -237,15 +247,19 @@ impl Database {
     /// Used by the scanner for incremental re-scan: if mtime + size have not
     /// changed, the file was not modified and we can reuse the cached hash.
     pub fn find_by_path(&self, path: &str) -> Option<CachedFile> {
-        self.conn.query_row(
-            "SELECT blake3_hash, size_bytes, mtime FROM files WHERE current_path = ?1",
-            params![path],
-            |r| Ok(CachedFile {
-                blake3_hash: r.get(0)?,
-                size_bytes:  r.get::<_, i64>(1)? as u64,
-                mtime:       r.get::<_, Option<i64>>(2)?.map(|v| v as u64),
-            }),
-        ).ok()
+        self.conn
+            .query_row(
+                "SELECT blake3_hash, size_bytes, mtime FROM files WHERE current_path = ?1",
+                params![path],
+                |r| {
+                    Ok(CachedFile {
+                        blake3_hash: r.get(0)?,
+                        size_bytes: r.get::<_, i64>(1)? as u64,
+                        mtime: r.get::<_, Option<i64>>(2)?.map(|v| v as u64),
+                    })
+                },
+            )
+            .ok()
     }
 
     fn insert_meta_3d(&self, id: i64, m: &Meta3D) -> Result<()> {
@@ -254,10 +268,14 @@ impl Database {
              (file_id, format, triangle_count, vertex_count, object_count, dim_x, dim_y, dim_z)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             params![
-                id, m.format,
+                id,
+                m.format,
                 m.triangle_count.map(|v| v as i64),
                 m.vertex_count.map(|v| v as i64),
-                m.object_count, m.dim_x, m.dim_y, m.dim_z,
+                m.object_count,
+                m.dim_x,
+                m.dim_y,
+                m.dim_z,
             ],
         )?;
         Ok(())
@@ -270,10 +288,17 @@ impl Database {
               bitrate_kbps, fps, title, year, container)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             params![
-                id, m.duration_secs, m.width, m.height,
-                m.codec_video, m.codec_audio,
+                id,
+                m.duration_secs,
+                m.width,
+                m.height,
+                m.codec_video,
+                m.codec_audio,
                 m.bitrate_kbps.map(|v| v as i64),
-                m.fps, m.title, m.year, m.container,
+                m.fps,
+                m.title,
+                m.year,
+                m.container,
             ],
         )?;
         Ok(())
@@ -286,9 +311,17 @@ impl Database {
               title, artist, album, year, genre, track_number)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
             params![
-                id, m.duration_secs, m.bitrate_kbps, m.sample_rate_hz,
+                id,
+                m.duration_secs,
+                m.bitrate_kbps,
+                m.sample_rate_hz,
                 m.channels.map(|v| v as i32),
-                m.title, m.artist, m.album, m.year, m.genre, m.track_number,
+                m.title,
+                m.artist,
+                m.album,
+                m.year,
+                m.genre,
+                m.track_number,
             ],
         )?;
         Ok(())
@@ -301,10 +334,18 @@ impl Database {
               camera_model, taken_at, gps_lat, gps_lon, iso, focal_length, phash)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
             params![
-                id, m.width, m.height, m.color_space,
+                id,
+                m.width,
+                m.height,
+                m.color_space,
                 m.has_alpha.map(|v| v as i32),
-                m.camera_make, m.camera_model, m.taken_at,
-                m.gps_lat, m.gps_lon, m.iso, m.focal_length,
+                m.camera_make,
+                m.camera_model,
+                m.taken_at,
+                m.gps_lat,
+                m.gps_lon,
+                m.iso,
+                m.focal_length,
                 m.phash,
             ],
         )?;
@@ -322,9 +363,9 @@ impl Database {
     pub fn cleanup_stale(&self) -> Result<(usize, usize)> {
         // 1. Duplicates whose duplicate_path no longer exists
         let dup_paths: Vec<(i64, String)> = {
-            let mut stmt = self.conn.prepare(
-                "SELECT id, duplicate_path FROM duplicates"
-            )?;
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id, duplicate_path FROM duplicates")?;
             stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .filter_map(|r| r.ok())
                 .collect()
@@ -332,7 +373,9 @@ impl Database {
 
         let mut dupes_removed = 0usize;
         for (id, path) in &dup_paths {
-            let stale = if let Some(archive) = path.splitn(2, "::").next().filter(|_| path.contains("::")) {
+            let stale = if let Some(archive) =
+                path.splitn(2, "::").next().filter(|_| path.contains("::"))
+            {
                 // Entry inside an archive: stale if the archive no longer exists
                 !std::path::Path::new(archive).exists()
             } else {
@@ -350,9 +393,7 @@ impl Database {
         // 2. Canonical files whose current_path no longer exists
         // (ON DELETE CASCADE cleans up duplicates + meta_* automatically)
         let file_paths: Vec<(i64, String)> = {
-            let mut stmt = self.conn.prepare(
-                "SELECT id, current_path FROM files"
-            )?;
+            let mut stmt = self.conn.prepare("SELECT id, current_path FROM files")?;
             stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .filter_map(|r| r.ok())
                 .collect()
@@ -360,17 +401,17 @@ impl Database {
 
         let mut files_removed = 0usize;
         for (id, path) in &file_paths {
-            let stale = if let Some(archive) = path.splitn(2, "::").next().filter(|_| path.contains("::")) {
+            let stale = if let Some(archive) =
+                path.splitn(2, "::").next().filter(|_| path.contains("::"))
+            {
                 // Canonical inside an archive: stale if the archive no longer exists
                 !std::path::Path::new(archive).exists()
             } else {
                 !std::path::Path::new(path).exists()
             };
             if stale {
-                self.conn.execute(
-                    "DELETE FROM files WHERE id = ?1",
-                    rusqlite::params![id],
-                )?;
+                self.conn
+                    .execute("DELETE FROM files WHERE id = ?1", rusqlite::params![id])?;
                 files_removed += 1;
             }
         }
@@ -386,9 +427,9 @@ impl Database {
     /// with hashes, which are the real source of truth.
     pub fn can_safely_delete_archive(
         &self,
-        archive_path:      &str,
-        deleted_paths:     &std::collections::HashSet<String>,
-        archives_to_del:   &std::collections::HashSet<String>,
+        archive_path: &str,
+        deleted_paths: &std::collections::HashSet<String>,
+        archives_to_del: &std::collections::HashSet<String>,
     ) -> Result<bool> {
         // 1. Get ALL hashes from the archive (canonical + duplicates)
         let hashes: Vec<String> = {
@@ -402,16 +443,19 @@ impl Database {
                  SELECT DISTINCT f.blake3_hash
                  FROM files f
                  JOIN duplicates d ON d.canonical_id = f.id
-                 WHERE d.duplicate_path LIKE ?2"
+                 WHERE d.duplicate_path LIKE ?2",
             )?;
-            stmt.query_map(
-                params![archive_path, format!("{archive_path}::%")],
-                |r| r.get(0),
-            )?.filter_map(|r| r.ok()).collect()
+            stmt.query_map(params![archive_path, format!("{archive_path}::%")], |r| {
+                r.get(0)
+            })?
+            .filter_map(|r| r.ok())
+            .collect()
         };
 
         // No indexed files found → do not delete (empty or not yet scanned)
-        if hashes.is_empty() { return Ok(false); }
+        if hashes.is_empty() {
+            return Ok(false);
+        }
 
         // 2. For each hash, verify that another copy exists outside this archive
         for hash in &hashes {
@@ -422,7 +466,7 @@ impl Database {
                      SELECT d.duplicate_path
                      FROM duplicates d
                      JOIN files f ON f.id = d.canonical_id
-                     WHERE f.blake3_hash = ?1"
+                     WHERE f.blake3_hash = ?1",
                 )?;
                 stmt.query_map(params![hash], |r| r.get(0))?
                     .filter_map(|r| r.ok())
@@ -435,13 +479,17 @@ impl Database {
                     return false;
                 }
                 // Exclude paths already deleted in this run
-                if deleted_paths.contains(copy) { return false; }
+                if deleted_paths.contains(copy) {
+                    return false;
+                }
 
                 if copy.contains("::") {
                     // Copy inside another archive
                     let parent = copy.splitn(2, "::").next().unwrap_or("");
                     // That archive must not be getting deleted
-                    if archives_to_del.contains(parent) { return false; }
+                    if archives_to_del.contains(parent) {
+                        return false;
+                    }
                     // And it must exist on disk
                     std::path::Path::new(parent).exists()
                 } else {
@@ -450,7 +498,9 @@ impl Database {
                 }
             });
 
-            if !has_surviving_copy { return Ok(false); }
+            if !has_surviving_copy {
+                return Ok(false);
+            }
         }
 
         Ok(true)
@@ -463,17 +513,21 @@ impl Database {
             "SELECT id, blake3_hash, current_path, size_bytes
              FROM files
              WHERE source_archive IS NULL
-             ORDER BY size_bytes DESC"
+             ORDER BY size_bytes DESC",
         )?;
-        let results = stmt.query_map([], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)? as u64))
-        })?.filter_map(|r| r.ok()).collect();
+        let results = stmt
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)? as u64))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
         Ok(results)
     }
 
     /// Removes a canonical file from the DB by id (and its duplicates via cascade).
     pub fn remove_file(&self, id: i64) -> Result<()> {
-        self.conn.execute("DELETE FROM files WHERE id = ?1", rusqlite::params![id])?;
+        self.conn
+            .execute("DELETE FROM files WHERE id = ?1", rusqlite::params![id])?;
         Ok(())
     }
 
@@ -515,7 +569,7 @@ impl Database {
     ) -> Result<Vec<(String, String, String, String)>> {
         let type_filter = match media_type {
             Some(t) => format!("media_type = '{t}'"),
-            None    => "media_type IN ('image', 'video', '3d')".to_string(),
+            None => "media_type IN ('image', 'video', '3d')".to_string(),
         };
 
         let sql = format!(
@@ -526,9 +580,10 @@ impl Database {
         );
 
         let mut stmt = self.conn.prepare(&sql)?;
-        let results = stmt.query_map([], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-        })?.filter_map(|r| r.ok()).collect();
+        let results = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
 
         Ok(results)
     }
@@ -536,49 +591,76 @@ impl Database {
     // ── Queries ───────────────────────────────────────────────────────────
 
     pub fn stats(&self) -> Result<DbStats> {
-        let total: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
-        let dupes: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM duplicates", [], |r| r.get(0))?;
-        let bytes: i64 = self.conn.query_row(
-            "SELECT COALESCE(SUM(size_bytes),0) FROM files", [], |r| r.get(0))?;
+        let total: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
+        let dupes: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM duplicates", [], |r| r.get(0))?;
+        let bytes: i64 =
+            self.conn
+                .query_row("SELECT COALESCE(SUM(size_bytes),0) FROM files", [], |r| {
+                    r.get(0)
+                })?;
         let bytes_dup: i64 = self.conn.query_row(
             "SELECT COALESCE(SUM(f.size_bytes),0)
-             FROM duplicates d JOIN files f ON f.id = d.canonical_id", [], |r| r.get(0))?;
+             FROM duplicates d JOIN files f ON f.id = d.canonical_id",
+            [],
+            |r| r.get(0),
+        )?;
 
         let by_type: Vec<(String, i64, i64)> = {
             let mut stmt = self.conn.prepare(
                 "SELECT media_type, COUNT(*), COALESCE(SUM(size_bytes),0)
-                 FROM files GROUP BY media_type ORDER BY 2 DESC"
+                 FROM files GROUP BY media_type ORDER BY 2 DESC",
             )?;
             stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
                 .filter_map(|r| r.ok())
                 .collect()
         };
 
-        Ok(DbStats { total, dupes, bytes, bytes_dup, by_type })
+        Ok(DbStats {
+            total,
+            dupes,
+            bytes,
+            bytes_dup,
+            by_type,
+        })
     }
 
     pub fn duplicates(&self) -> Result<Vec<DuplicateGroup>> {
-        let mut stmt = self.conn.prepare("
+        let mut stmt = self.conn.prepare(
+            "
             SELECT f.blake3_hash, f.original_name, f.current_path,
                    f.size_bytes, f.media_type, d.duplicate_path
             FROM duplicates d
             JOIN files f ON f.id = d.canonical_id
             ORDER BY f.media_type, f.size_bytes DESC
-        ")?;
+        ",
+        )?;
 
         let mut groups: std::collections::HashMap<String, DuplicateGroup> =
             std::collections::HashMap::new();
 
         stmt.query_map([], |r| {
-            Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?,
-                r.get::<_,String>(2)?, r.get::<_,i64>(3)?,
-                r.get::<_,String>(4)?, r.get::<_,String>(5)?))
-        })?.filter_map(|r| r.ok()).for_each(|(hash, name, path, size, mtype, dupe)| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, i64>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+            ))
+        })?
+        .filter_map(|r| r.ok())
+        .for_each(|(hash, name, path, size, mtype, dupe)| {
             let entry = groups.entry(hash.clone()).or_insert(DuplicateGroup {
-                hash, canonical_name: name, canonical_path: path,
-                size_bytes: size as u64, media_type: mtype, duplicates: vec![],
+                hash,
+                canonical_name: name,
+                canonical_path: path,
+                size_bytes: size as u64,
+                media_type: mtype,
+                duplicates: vec![],
             });
             entry.duplicates.push(dupe);
         });
@@ -590,9 +672,12 @@ impl Database {
 
     pub fn search(&self, query: &str, media_type: Option<&str>) -> Result<Vec<SearchResult>> {
         let pattern = format!("%{query}%");
-        let type_filter = media_type.map(|t| format!("AND f.media_type = '{t}'")).unwrap_or_default();
+        let type_filter = media_type
+            .map(|t| format!("AND f.media_type = '{t}'"))
+            .unwrap_or_default();
 
-        let sql = format!("
+        let sql = format!(
+            "
             SELECT f.id, f.original_name, f.current_path, f.media_type,
                    f.size_bytes, f.extension,
                    a.duration_secs, a.artist, a.title as audio_title, a.album,
@@ -607,46 +692,50 @@ impl Database {
             WHERE f.original_name LIKE ?1 {type_filter}
             ORDER BY f.original_name
             LIMIT 200
-        ");
+        "
+        );
 
         let mut stmt = self.conn.prepare(&sql)?;
-        let results = stmt.query_map(params![pattern], |r| {
-            let media_type_str: String = r.get(3)?;
-            let media_type = MediaType::from_str(&media_type_str);
+        let results = stmt
+            .query_map(params![pattern], |r| {
+                let media_type_str: String = r.get(3)?;
+                let media_type = MediaType::from_str(&media_type_str);
 
-            let detail = match media_type {
-                MediaType::Audio => SearchDetail::Audio {
-                    duration: r.get(6)?,
-                    artist:   r.get(7)?,
-                    title:    r.get(8)?,
-                    album:    r.get(9)?,
-                },
-                MediaType::Video => SearchDetail::Video {
-                    duration: r.get(10)?,
-                    width:    r.get(11)?,
-                    height:   r.get(12)?,
-                    title:    r.get(13)?,
-                },
-                MediaType::Image => SearchDetail::Image {
-                    width:  r.get(14)?,
-                    height: r.get(15)?,
-                    camera: r.get(16)?,
-                },
-                MediaType::Print3D => SearchDetail::Print3D {
-                    triangles: r.get::<_, Option<i64>>(17)?.map(|v| v as u64),
-                },
-                MediaType::Other => SearchDetail::Other,
-            };
+                let detail = match media_type {
+                    MediaType::Audio => SearchDetail::Audio {
+                        duration: r.get(6)?,
+                        artist: r.get(7)?,
+                        title: r.get(8)?,
+                        album: r.get(9)?,
+                    },
+                    MediaType::Video => SearchDetail::Video {
+                        duration: r.get(10)?,
+                        width: r.get(11)?,
+                        height: r.get(12)?,
+                        title: r.get(13)?,
+                    },
+                    MediaType::Image => SearchDetail::Image {
+                        width: r.get(14)?,
+                        height: r.get(15)?,
+                        camera: r.get(16)?,
+                    },
+                    MediaType::Print3D => SearchDetail::Print3D {
+                        triangles: r.get::<_, Option<i64>>(17)?.map(|v| v as u64),
+                    },
+                    MediaType::Other => SearchDetail::Other,
+                };
 
-            Ok(SearchResult {
-                name:       r.get(1)?,
-                path:       r.get(2)?,
-                media_type: media_type_str,
-                size_bytes: r.get::<_, i64>(4)? as u64,
-                extension:  r.get(5)?,
-                detail,
-            })
-        })?.filter_map(|r| r.ok()).collect();
+                Ok(SearchResult {
+                    name: r.get(1)?,
+                    path: r.get(2)?,
+                    media_type: media_type_str,
+                    size_bytes: r.get::<_, i64>(4)? as u64,
+                    extension: r.get(5)?,
+                    detail,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
 
         Ok(results)
     }
@@ -656,7 +745,7 @@ impl Database {
     /// Groups images by Hamming distance of their phash.
     /// threshold: 0 = identical, ≤10 = very similar, ≤20 = similar.
     pub fn similar_images(&self, threshold: u32) -> Result<Vec<crate::models::SimilarImageGroup>> {
-        use crate::models::{SimilarImageGroup, SimilarImageEntry};
+        use crate::models::{SimilarImageEntry, SimilarImageGroup};
 
         let rows: Vec<(String, String, i64, i64, String)> = {
             let mut stmt = self.conn.prepare(
@@ -665,50 +754,70 @@ impl Database {
                  FROM files f
                  JOIN meta_image i ON i.file_id = f.id
                  WHERE i.phash IS NOT NULL
-                 ORDER BY f.size_bytes DESC"
+                 ORDER BY f.size_bytes DESC",
             )?;
-            stmt.query_map([], |r| Ok((
-                r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?
-            )))?.filter_map(|r| r.ok()).collect()
+            stmt.query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect()
         };
 
         let n = rows.len();
-        if n < 2 { return Ok(vec![]); }
+        if n < 2 {
+            return Ok(vec![]);
+        }
 
         // Union-Find to group by similarity
         let mut parent: Vec<usize> = (0..n).collect();
         for i in 0..n {
-            for j in (i+1)..n {
+            for j in (i + 1)..n {
                 if let Some(dist) = phash_distance(&rows[i].4, &rows[j].4) {
                     if dist <= threshold {
                         let ri = uf_find(&mut parent, i);
                         let rj = uf_find(&mut parent, j);
-                        if ri != rj { parent[ri] = rj; }
+                        if ri != rj {
+                            parent[ri] = rj;
+                        }
                     }
                 }
             }
         }
 
         let mut groups: std::collections::HashMap<usize, Vec<usize>> = Default::default();
-        for i in 0..n { groups.entry(uf_find(&mut parent, i)).or_default().push(i); }
+        for i in 0..n {
+            groups.entry(uf_find(&mut parent, i)).or_default().push(i);
+        }
 
-        Ok(groups.into_values()
+        Ok(groups
+            .into_values()
             .filter(|v| v.len() >= 2)
             .map(|idx| SimilarImageGroup {
-                files: idx.into_iter().map(|i| SimilarImageEntry {
-                    path:   rows[i].0.clone(),
-                    name:   rows[i].1.clone(),
-                    width:  if rows[i].2 > 0 { Some(rows[i].2 as u32) } else { None },
-                    height: if rows[i].3 > 0 { Some(rows[i].3 as u32) } else { None },
-                    phash:  rows[i].4.clone(),
-                }).collect(),
+                files: idx
+                    .into_iter()
+                    .map(|i| SimilarImageEntry {
+                        path: rows[i].0.clone(),
+                        name: rows[i].1.clone(),
+                        width: if rows[i].2 > 0 {
+                            Some(rows[i].2 as u32)
+                        } else {
+                            None
+                        },
+                        height: if rows[i].3 > 0 {
+                            Some(rows[i].3 as u32)
+                        } else {
+                            None
+                        },
+                        phash: rows[i].4.clone(),
+                    })
+                    .collect(),
             })
             .collect())
     }
 
     /// Groups songs with the same title + artist (normalized to lowercase).
     pub fn similar_audio(&self) -> Result<Vec<crate::models::SimilarAudioGroup>> {
-        use crate::models::{SimilarAudioGroup, SimilarAudioEntry};
+        use crate::models::{SimilarAudioEntry, SimilarAudioGroup};
 
         let rows: Vec<(String, String, String, String, Option<f64>, Option<String>)> = {
             let mut stmt = self.conn.prepare(
@@ -719,11 +828,20 @@ impl Database {
                  FROM files f JOIN meta_audio a ON a.file_id = f.id
                  WHERE a.title  IS NOT NULL AND TRIM(a.title)  != ''
                    AND a.artist IS NOT NULL AND TRIM(a.artist) != ''
-                 ORDER BY LOWER(a.artist), LOWER(a.title)"
+                 ORDER BY LOWER(a.artist), LOWER(a.title)",
             )?;
-            stmt.query_map([], |r| Ok((
-                r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?
-            )))?.filter_map(|r| r.ok()).collect()
+            stmt.query_map([], |r| {
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect()
         };
 
         let mut map: std::collections::HashMap<
@@ -732,14 +850,25 @@ impl Database {
         > = Default::default();
 
         for (path, name, title, artist, dur, album) in rows {
-            let e = map.entry((title.clone(), artist.clone()))
+            let e = map
+                .entry((title.clone(), artist.clone()))
                 .or_insert_with(|| (title, artist, vec![]));
-            e.2.push(SimilarAudioEntry { path, name, duration_secs: dur, album });
+            e.2.push(SimilarAudioEntry {
+                path,
+                name,
+                duration_secs: dur,
+                album,
+            });
         }
 
-        Ok(map.into_values()
+        Ok(map
+            .into_values()
             .filter(|(_, _, files)| files.len() >= 2)
-            .map(|(title, artist, files)| SimilarAudioGroup { title, artist, files })
+            .map(|(title, artist, files)| SimilarAudioGroup {
+                title,
+                artist,
+                files,
+            })
             .collect())
     }
 }
@@ -756,54 +885,78 @@ fn uf_find(parent: &mut Vec<usize>, mut x: usize) -> usize {
 
 /// Hamming distance between two hex-encoded phashes. Returns None if either string is invalid.
 fn phash_distance(a: &str, b: &str) -> Option<u32> {
-    if a.len() != b.len() || a.len() % 2 != 0 { return None; }
+    if a.len() != b.len() || a.len() % 2 != 0 {
+        return None;
+    }
     let decode = |s: &str| -> Option<Vec<u8>> {
-        (0..s.len()).step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i+2], 16).ok())
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
             .collect()
     };
     let ab = decode(a)?;
     let bb = decode(b)?;
-    Some(ab.iter().zip(bb.iter()).map(|(x, y)| (x ^ y).count_ones()).sum())
+    Some(
+        ab.iter()
+            .zip(bb.iter())
+            .map(|(x, y)| (x ^ y).count_ones())
+            .sum(),
+    )
 }
 
 pub struct CachedFile {
     pub blake3_hash: String,
-    pub size_bytes:  u64,
-    pub mtime:       Option<u64>,
+    pub size_bytes: u64,
+    pub mtime: Option<u64>,
 }
 
 pub struct DbStats {
-    pub total:    i64,
-    pub dupes:    i64,
-    pub bytes:    i64,
+    pub total: i64,
+    pub dupes: i64,
+    pub bytes: i64,
     pub bytes_dup: i64,
-    pub by_type:  Vec<(String, i64, i64)>,
+    pub by_type: Vec<(String, i64, i64)>,
 }
 
 pub struct DuplicateGroup {
-    pub hash:           String,
+    pub hash: String,
     pub canonical_name: String,
     pub canonical_path: String,
-    pub size_bytes:     u64,
-    pub media_type:     String,
-    pub duplicates:     Vec<String>,
+    pub size_bytes: u64,
+    pub media_type: String,
+    pub duplicates: Vec<String>,
 }
 
 pub struct SearchResult {
-    pub name:       String,
-    pub path:       String,
+    pub name: String,
+    pub path: String,
     pub media_type: String,
     pub size_bytes: u64,
-    pub extension:  String,
-    pub detail:     SearchDetail,
+    pub extension: String,
+    pub detail: SearchDetail,
 }
 
 pub enum SearchDetail {
-    Audio  { duration: Option<f64>, artist: Option<String>, title: Option<String>, album: Option<String> },
-    Video  { duration: Option<f64>, width: Option<u32>, height: Option<u32>, title: Option<String> },
-    Image  { width: Option<u32>, height: Option<u32>, camera: Option<String> },
-    Print3D { triangles: Option<u64> },
+    Audio {
+        duration: Option<f64>,
+        artist: Option<String>,
+        title: Option<String>,
+        album: Option<String>,
+    },
+    Video {
+        duration: Option<f64>,
+        width: Option<u32>,
+        height: Option<u32>,
+        title: Option<String>,
+    },
+    Image {
+        width: Option<u32>,
+        height: Option<u32>,
+        camera: Option<String>,
+    },
+    Print3D {
+        triangles: Option<u64>,
+    },
     Other,
 }
 
@@ -820,17 +973,17 @@ mod tests {
 
     fn entry(hash: &str, path: &str, name: &str) -> MediaEntry {
         MediaEntry {
-            blake3_hash:     hash.to_string(),
-            size_bytes:      1_000,
-            original_name:   name.to_string(),
-            current_path:    path.to_string(),
-            extension:       "jpg".to_string(),
-            media_type:      MediaType::Image,
-            metadata:        Metadata::None,
-            source_archive:  None,
+            blake3_hash: hash.to_string(),
+            size_bytes: 1_000,
+            original_name: name.to_string(),
+            current_path: path.to_string(),
+            extension: "jpg".to_string(),
+            media_type: MediaType::Image,
+            metadata: Metadata::None,
+            source_archive: None,
             path_in_archive: None,
-            mtime:           None,
-            from_cache:      false,
+            mtime: None,
+            from_cache: false,
         }
     }
 
@@ -844,26 +997,26 @@ mod tests {
 
     #[test]
     fn copy_score_copy_spanish() {
-        assert!(copy_score("/fotos/foto - copia.jpg")   >= 10_000);
+        assert!(copy_score("/fotos/foto - copia.jpg") >= 10_000);
         assert!(copy_score("/fotos/foto - copia (2).jpg") >= 10_000);
     }
 
     #[test]
     fn copy_score_copy_english() {
-        assert!(copy_score("/fotos/photo - Copy.jpg")   >= 10_000);
+        assert!(copy_score("/fotos/photo - Copy.jpg") >= 10_000);
     }
 
     #[test]
     fn copy_score_numeric_suffix() {
         // "file_1", "file_2" → numeric suffix preceded by '_'
-        assert!(copy_score("/fotos/imagen_2.jpg")  >= 5_000);
+        assert!(copy_score("/fotos/imagen_2.jpg") >= 5_000);
         assert!(copy_score("/fotos/imagen_10.jpg") >= 5_000);
     }
 
     #[test]
     fn copy_score_backup() {
         assert!(copy_score("/fotos/foto_backup.jpg") >= 6_000);
-        assert!(copy_score("/fotos/foto_bak.jpg")    >= 6_000);
+        assert!(copy_score("/fotos/foto_bak.jpg") >= 6_000);
     }
 
     #[test]
@@ -904,14 +1057,21 @@ mod tests {
     fn insert_promotes_more_original_to_canonical() {
         let db = mem_db();
         // The copy is indexed first
-        db.insert(&entry("h1", "/fotos/foto - copia.jpg", "foto - copia.jpg")).unwrap();
+        db.insert(&entry("h1", "/fotos/foto - copia.jpg", "foto - copia.jpg"))
+            .unwrap();
         // Then the original — should be promoted to canonical
-        let (_, is_dup, _) = db.insert(&entry("h1", "/fotos/foto.jpg", "foto.jpg")).unwrap();
+        let (_, is_dup, _) = db
+            .insert(&entry("h1", "/fotos/foto.jpg", "foto.jpg"))
+            .unwrap();
         assert!(!is_dup);
         let groups = db.duplicates().unwrap();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].canonical_path, "/fotos/foto.jpg");
-        assert!(groups[0].duplicates.contains(&"/fotos/foto - copia.jpg".to_string()));
+        assert!(
+            groups[0]
+                .duplicates
+                .contains(&"/fotos/foto - copia.jpg".to_string())
+        );
     }
 
     // ── stats ─────────────────────────────────────────────────────────────
@@ -940,7 +1100,8 @@ mod tests {
     #[test]
     fn search_finds_by_partial_name() {
         let db = mem_db();
-        db.insert(&entry("h1", "/fotos/vacaciones.jpg", "vacaciones.jpg")).unwrap();
+        db.insert(&entry("h1", "/fotos/vacaciones.jpg", "vacaciones.jpg"))
+            .unwrap();
         let r = db.search("vacacion", None).unwrap();
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].name, "vacaciones.jpg");
@@ -949,14 +1110,16 @@ mod tests {
     #[test]
     fn search_no_results() {
         let db = mem_db();
-        db.insert(&entry("h1", "/fotos/foto.jpg", "foto.jpg")).unwrap();
+        db.insert(&entry("h1", "/fotos/foto.jpg", "foto.jpg"))
+            .unwrap();
         assert!(db.search("xyznotfound", None).unwrap().is_empty());
     }
 
     #[test]
     fn search_filter_by_type() {
         let db = mem_db();
-        db.insert(&entry("h1", "/fotos/foto.jpg", "foto.jpg")).unwrap();
+        db.insert(&entry("h1", "/fotos/foto.jpg", "foto.jpg"))
+            .unwrap();
         assert!(db.search("foto", Some("video")).unwrap().is_empty());
         assert_eq!(db.search("foto", Some("image")).unwrap().len(), 1);
     }
@@ -1002,7 +1165,8 @@ mod tests {
     #[test]
     fn cleanup_stale_removes_nonexistent_path() {
         let db = mem_db();
-        db.insert(&entry("h1", "/ruta/que/no/existe.jpg", "inexistente.jpg")).unwrap();
+        db.insert(&entry("h1", "/ruta/que/no/existe.jpg", "inexistente.jpg"))
+            .unwrap();
         let (removed, _) = db.cleanup_stale().unwrap();
         assert_eq!(removed, 1);
         assert_eq!(db.stats().unwrap().total, 0);
@@ -1027,7 +1191,8 @@ mod tests {
         let path = tmp.path().to_str().unwrap().to_string();
         db.insert(&entry("h1", &path, "real.jpg")).unwrap();
         // Duplicate with nonexistent path — cleanup_stale must remove it
-        db.insert(&entry("h1", "/no/existe/copia.jpg", "copia.jpg")).unwrap();
+        db.insert(&entry("h1", "/no/existe/copia.jpg", "copia.jpg"))
+            .unwrap();
         let (_, dupes_removed) = db.cleanup_stale().unwrap();
         assert_eq!(dupes_removed, 1);
         assert_eq!(db.duplicates().unwrap().len(), 0);
@@ -1038,8 +1203,10 @@ mod tests {
     #[test]
     fn purge_removes_macosx_in_path() {
         let db = mem_db();
-        db.insert(&entry("h1", "/arc.zip::__MACOSX/file.jpg", "file.jpg")).unwrap();
-        db.insert(&entry("h2", "/normal.jpg", "normal.jpg")).unwrap();
+        db.insert(&entry("h1", "/arc.zip::__MACOSX/file.jpg", "file.jpg"))
+            .unwrap();
+        db.insert(&entry("h2", "/normal.jpg", "normal.jpg"))
+            .unwrap();
         let removed = db.purge_macos_junk().unwrap();
         assert!(removed >= 1);
         assert_eq!(db.stats().unwrap().total, 1); // only the normal file remains
@@ -1048,7 +1215,8 @@ mod tests {
     #[test]
     fn purge_removes_dot_underscore() {
         let db = mem_db();
-        db.insert(&entry("h1", "/arc.zip::._hidden", "._hidden")).unwrap();
+        db.insert(&entry("h1", "/arc.zip::._hidden", "._hidden"))
+            .unwrap();
         let removed = db.purge_macos_junk().unwrap();
         assert!(removed >= 1);
     }
@@ -1056,7 +1224,8 @@ mod tests {
     #[test]
     fn purge_removes_ds_store() {
         let db = mem_db();
-        db.insert(&entry("h1", "/arc.zip::.DS_Store", ".DS_Store")).unwrap();
+        db.insert(&entry("h1", "/arc.zip::.DS_Store", ".DS_Store"))
+            .unwrap();
         let removed = db.purge_macos_junk().unwrap();
         assert!(removed >= 1);
     }
@@ -1065,7 +1234,7 @@ mod tests {
     fn purge_via_source_archive_and_path_in_archive() {
         let db = mem_db();
         let mut e = entry("h1", "/arc.zip::__MACOSX/._icon", "._icon");
-        e.source_archive  = Some("/arc.zip".to_string());
+        e.source_archive = Some("/arc.zip".to_string());
         e.path_in_archive = Some("__MACOSX/._icon".to_string());
         db.insert(&e).unwrap();
         assert!(db.purge_macos_junk().unwrap() >= 1);
@@ -1075,8 +1244,10 @@ mod tests {
     #[test]
     fn purge_does_not_touch_normal_files() {
         let db = mem_db();
-        db.insert(&entry("h1", "/fotos/foto.jpg", "foto.jpg")).unwrap();
-        db.insert(&entry("h2", "/arc.zip::real.jpg", "real.jpg")).unwrap();
+        db.insert(&entry("h1", "/fotos/foto.jpg", "foto.jpg"))
+            .unwrap();
+        db.insert(&entry("h2", "/arc.zip::real.jpg", "real.jpg"))
+            .unwrap();
         let removed = db.purge_macos_junk().unwrap();
         assert_eq!(removed, 0);
         assert_eq!(db.stats().unwrap().total, 2);
@@ -1087,9 +1258,10 @@ mod tests {
     #[test]
     fn files_for_verify_excludes_archive_entries() {
         let db = mem_db();
-        db.insert(&entry("h1", "/archivo.jpg", "archivo.jpg")).unwrap();
+        db.insert(&entry("h1", "/archivo.jpg", "archivo.jpg"))
+            .unwrap();
         let mut arc = entry("h2", "/arc.zip::inner.jpg", "inner.jpg");
-        arc.source_archive  = Some("/arc.zip".to_string());
+        arc.source_archive = Some("/arc.zip".to_string());
         arc.path_in_archive = Some("inner.jpg".to_string());
         db.insert(&arc).unwrap();
         let files = db.files_for_verify().unwrap();
@@ -1128,11 +1300,11 @@ mod tests {
         // Metadata tables do have ON DELETE CASCADE
         let db = mem_db();
         let mut e = entry("h1", "/cancion.mp3", "cancion.mp3");
-        e.extension  = "mp3".to_string();
+        e.extension = "mp3".to_string();
         e.media_type = MediaType::Audio;
-        e.metadata   = Metadata::Audio(crate::models::MetaAudio {
+        e.metadata = Metadata::Audio(crate::models::MetaAudio {
             duration_secs: Some(180.0),
-            artist:        Some("Artista".to_string()),
+            artist: Some("Artista".to_string()),
             ..Default::default()
         });
         db.insert(&e).unwrap();
@@ -1159,27 +1331,44 @@ fn copy_score(path: &str) -> u32 {
     let mut score = 0u32;
 
     // Windows Spanish: "archivo - copia", "archivo - copia (2)"
-    if name.contains(" - copia") { score += 10_000; }
+    if name.contains(" - copia") {
+        score += 10_000;
+    }
 
     // Windows English: "file - Copy", "file - Copy (2)"
-    if name.contains(" - copy") { score += 10_000; }
+    if name.contains(" - copy") {
+        score += 10_000;
+    }
 
     // macOS / Linux: "file (1)", "file (2)", ...
     if name.ends_with(')') {
         let re = name.trim_end_matches(|c: char| c.is_ascii_digit() || c == ' ' || c == '(');
         let suffix = &name[re.len()..];
-        if suffix.trim().starts_with('(') { score += 8_000; }
+        if suffix.trim().starts_with('(') {
+            score += 8_000;
+        }
     }
 
     // Numeric suffixes: "file_1", "file_2", "file 1", "file 2"
-    if name.chars().last().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+    if name
+        .chars()
+        .last()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
         let trimmed = name.trim_end_matches(|c: char| c.is_ascii_digit());
-        if trimmed.ends_with('_') || trimmed.ends_with(' ') { score += 5_000; }
+        if trimmed.ends_with('_') || trimmed.ends_with(' ') {
+            score += 5_000;
+        }
     }
 
     // Generic keywords in the name
-    for keyword in &["_copy", "_backup", "_bak", " backup", " bak", "copy_of", "copia_de"] {
-        if name.contains(keyword) { score += 6_000; }
+    for keyword in &[
+        "_copy", "_backup", "_bak", " backup", " bak", "copy_of", "copia_de",
+    ] {
+        if name.contains(keyword) {
+            score += 6_000;
+        }
     }
 
     // Tiebreaker: penalize short names. Longer names are more descriptive

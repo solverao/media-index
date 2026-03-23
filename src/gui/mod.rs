@@ -1,23 +1,23 @@
-mod dashboard;
-mod scanner_view;
 mod browser;
+mod dashboard;
 mod dupes;
-mod similar;
 mod maintenance;
+mod scanner_view;
+mod similar;
 
+use eframe::egui;
 use std::path::PathBuf;
 use std::sync::mpsc;
-use eframe::egui;
 
 use crate::db::{DbStats, DuplicateGroup, SearchResult};
-use crate::models::{ScanStats, SimilarImageGroup, SimilarAudioGroup};
+use crate::models::{ScanStats, SimilarAudioGroup, SimilarImageGroup};
 
-pub use dashboard::DashboardState;
-pub use scanner_view::ScannerState;
 pub use browser::BrowserState;
+pub use dashboard::DashboardState;
 pub use dupes::DupesState;
-pub use similar::SimilarState;
 pub use maintenance::MaintenanceState;
+pub use scanner_view::ScannerState;
+pub use similar::SimilarState;
 
 // ── Navigation ────────────────────────────────────────────────────────────
 
@@ -40,28 +40,39 @@ pub enum TaskResult {
     SearchResults(Vec<SearchResult>),
     DupesLoaded(Vec<DuplicateGroup>),
     #[allow(dead_code)]
-    DupesDeleted { deleted: usize, freed_bytes: u64 },
+    DupesDeleted {
+        deleted: usize,
+        freed_bytes: u64,
+    },
     SimilarImages(Vec<SimilarImageGroup>),
     SimilarAudio(Vec<SimilarAudioGroup>),
     VerifyResults(Vec<VerifyEntry>),
-    ThumbsComplete { ok: usize, skipped: usize, errors: usize },
+    ThumbsComplete {
+        ok: usize,
+        skipped: usize,
+        errors: usize,
+    },
     CleanDone(usize),
     Error(String),
     Info(String),
 }
 
 pub struct VerifyEntry {
-    pub name:   String,
-    pub path:   String,
+    pub name: String,
+    pub path: String,
     pub status: VerifyStatus,
 }
 
-pub enum VerifyStatus { Ok, Missing, Corrupted }
+pub enum VerifyStatus {
+    Ok,
+    Missing,
+    Corrupted,
+}
 
 // ── App ───────────────────────────────────────────────────────────────────
 
 pub struct MediaIndexApp {
-    db_path:       String,
+    db_path: String,
     db_path_input: String,
 
     active_view: View,
@@ -69,15 +80,15 @@ pub struct MediaIndexApp {
     result_tx: mpsc::Sender<TaskResult>,
     result_rx: mpsc::Receiver<TaskResult>,
 
-    pub dashboard:   DashboardState,
-    pub scanner:     ScannerState,
-    pub browser:     BrowserState,
-    pub dupes:       DupesState,
-    pub similar:     SimilarState,
+    pub dashboard: DashboardState,
+    pub scanner: ScannerState,
+    pub browser: BrowserState,
+    pub dupes: DupesState,
+    pub similar: SimilarState,
     pub maintenance: MaintenanceState,
 
-    is_loading:  bool,
-    status_msg:  String,
+    is_loading: bool,
+    status_msg: String,
     #[allow(dead_code)]
     thumb_scroll: f32,
 }
@@ -88,23 +99,24 @@ impl MediaIndexApp {
         Self {
             db_path_input: db_path.clone(),
             db_path,
-            active_view:  View::Dashboard,
-            result_tx:    tx,
-            result_rx:    rx,
-            dashboard:    DashboardState::default(),
-            scanner:      ScannerState::default(),
-            browser:      BrowserState::default(),
-            dupes:        DupesState::default(),
-            similar:      SimilarState::default(),
-            maintenance:  MaintenanceState::default(),
-            is_loading:   false,
-            status_msg:   String::new(),
+            active_view: View::Dashboard,
+            result_tx: tx,
+            result_rx: rx,
+            dashboard: DashboardState::default(),
+            scanner: ScannerState::default(),
+            browser: BrowserState::default(),
+            dupes: DupesState::default(),
+            similar: SimilarState::default(),
+            maintenance: MaintenanceState::default(),
+            is_loading: false,
+            status_msg: String::new(),
             thumb_scroll: 0.0,
         }
     }
 
     fn spawn<F>(&self, ctx: egui::Context, f: F)
-    where F: FnOnce() -> TaskResult + Send + 'static
+    where
+        F: FnOnce() -> TaskResult + Send + 'static,
     {
         let tx = self.result_tx.clone();
         std::thread::spawn(move || {
@@ -118,10 +130,8 @@ impl MediaIndexApp {
         self.is_loading = true;
         let db_path = self.db_path.clone();
         self.spawn(ctx, move || {
-            match crate::db::Database::open(&db_path)
-                .and_then(|db| db.stats())
-            {
-                Ok(s)  => TaskResult::StatsLoaded(s),
+            match crate::db::Database::open(&db_path).and_then(|db| db.stats()) {
+                Ok(s) => TaskResult::StatsLoaded(s),
                 Err(e) => TaskResult::Error(e.to_string()),
             }
         });
@@ -131,10 +141,8 @@ impl MediaIndexApp {
         self.is_loading = true;
         let db_path = self.db_path.clone();
         self.spawn(ctx, move || {
-            match crate::db::Database::open(&db_path)
-                .and_then(|db| db.duplicates())
-            {
-                Ok(g)  => TaskResult::DupesLoaded(g),
+            match crate::db::Database::open(&db_path).and_then(|db| db.duplicates()) {
+                Ok(g) => TaskResult::DupesLoaded(g),
                 Err(e) => TaskResult::Error(e.to_string()),
             }
         });
@@ -144,25 +152,44 @@ impl MediaIndexApp {
         while let Ok(result) = self.result_rx.try_recv() {
             self.is_loading = false;
             match result {
-                TaskResult::StatsLoaded(s)  => { self.dashboard.stats = Some(s); }
+                TaskResult::StatsLoaded(s) => {
+                    self.dashboard.stats = Some(s);
+                }
                 TaskResult::ScanComplete(s) => {
                     self.scanner.is_running = false;
                     self.scanner.last_stats = Some(s);
                     self.scanner.log.push("Scan complete.".into());
                 }
-                TaskResult::SearchResults(r) => { self.browser.results = r; }
-                TaskResult::DupesLoaded(g)   => { self.dupes.groups = g; }
-                TaskResult::DupesDeleted { deleted, freed_bytes } => {
-                    use humansize::{format_size, DECIMAL};
+                TaskResult::SearchResults(r) => {
+                    self.browser.results = r;
+                }
+                TaskResult::DupesLoaded(g) => {
+                    self.dupes.groups = g;
+                }
+                TaskResult::DupesDeleted {
+                    deleted,
+                    freed_bytes,
+                } => {
+                    use humansize::{DECIMAL, format_size};
                     self.status_msg = format!(
                         "Deleted {deleted} file(s), freed {}",
                         format_size(freed_bytes, DECIMAL)
                     );
                 }
-                TaskResult::SimilarImages(g) => { self.similar.image_groups = g; }
-                TaskResult::SimilarAudio(g)  => { self.similar.audio_groups = g; }
-                TaskResult::VerifyResults(r) => { self.maintenance.verify_results = r; }
-                TaskResult::ThumbsComplete { ok, skipped, errors } => {
+                TaskResult::SimilarImages(g) => {
+                    self.similar.image_groups = g;
+                }
+                TaskResult::SimilarAudio(g) => {
+                    self.similar.audio_groups = g;
+                }
+                TaskResult::VerifyResults(r) => {
+                    self.maintenance.verify_results = r;
+                }
+                TaskResult::ThumbsComplete {
+                    ok,
+                    skipped,
+                    errors,
+                } => {
                     self.maintenance.thumbs_result = Some((ok, skipped, errors));
                 }
                 TaskResult::CleanDone(n) => {
@@ -219,25 +246,22 @@ impl MediaIndexApp {
             .show(ctx, |ui| {
                 ui.add_space(8.0);
                 let entries: &[(&str, View, &str)] = &[
-                    ("Dashboard",     View::Dashboard,   "📊"),
-                    ("Scanner",       View::Scanner,     "🔍"),
-                    ("Explorador",    View::Browser,     "📁"),
-                    ("Duplicados",    View::Duplicates,  "♊"),
-                    ("Similares",     View::Similar,     "🔮"),
-                    ("Miniaturas",    View::Thumbnails,  "🖼"),
+                    ("Dashboard", View::Dashboard, "📊"),
+                    ("Scanner", View::Scanner, "🔍"),
+                    ("Explorador", View::Browser, "📁"),
+                    ("Duplicados", View::Duplicates, "♊"),
+                    ("Similares", View::Similar, "🔮"),
+                    ("Miniaturas", View::Thumbnails, "🖼"),
                     ("Mantenimiento", View::Maintenance, "🛠"),
                 ];
                 for (label, view, icon) in entries {
                     let sel = self.active_view == *view;
                     let text = format!("{icon} {label}");
-                    let btn = ui.add_sized(
-                        [138.0, 32.0],
-                        egui::SelectableLabel::new(sel, &text),
-                    );
+                    let btn = ui.add_sized([138.0, 32.0], egui::SelectableLabel::new(sel, &text));
                     if btn.clicked() {
                         self.active_view = *view;
                         match view {
-                            View::Dashboard  => self.load_stats(ctx.clone()),
+                            View::Dashboard => self.load_stats(ctx.clone()),
                             View::Duplicates => self.load_dupes(ctx.clone()),
                             _ => {}
                         }
@@ -321,22 +345,30 @@ impl eframe::App for MediaIndexApp {
         self.show_top_bar(ctx);
         self.show_sidebar(ctx);
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            match self.active_view {
-                View::Dashboard  => dashboard::show(ui, &mut self.dashboard,
-                                        ctx, &self.db_path, &self.result_tx),
-                View::Scanner    => scanner_view::show(ui, &mut self.scanner,
-                                        ctx, &self.db_path, &self.result_tx),
-                View::Browser    => browser::show(ui, &mut self.browser,
-                                        ctx, &self.db_path, &self.result_tx),
-                View::Duplicates => dupes::show(ui, &mut self.dupes,
-                                        ctx, &self.db_path, &self.result_tx),
-                View::Similar    => similar::show(ui, &mut self.similar,
-                                        ctx, &self.db_path, &self.result_tx),
-                View::Thumbnails => self.show_thumbnails_view(ui, ctx),
-                View::Maintenance => maintenance::show(ui, &mut self.maintenance,
-                                        ctx, &self.db_path, &self.result_tx),
+        egui::CentralPanel::default().show(ctx, |ui| match self.active_view {
+            View::Dashboard => {
+                dashboard::show(ui, &mut self.dashboard, ctx, &self.db_path, &self.result_tx)
             }
+            View::Scanner => {
+                scanner_view::show(ui, &mut self.scanner, ctx, &self.db_path, &self.result_tx)
+            }
+            View::Browser => {
+                browser::show(ui, &mut self.browser, ctx, &self.db_path, &self.result_tx)
+            }
+            View::Duplicates => {
+                dupes::show(ui, &mut self.dupes, ctx, &self.db_path, &self.result_tx)
+            }
+            View::Similar => {
+                similar::show(ui, &mut self.similar, ctx, &self.db_path, &self.result_tx)
+            }
+            View::Thumbnails => self.show_thumbnails_view(ui, ctx),
+            View::Maintenance => maintenance::show(
+                ui,
+                &mut self.maintenance,
+                ctx,
+                &self.db_path,
+                &self.result_tx,
+            ),
         });
     }
 }

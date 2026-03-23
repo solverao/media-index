@@ -13,29 +13,32 @@ pub fn parse(data: &[u8], _ext: &str) -> MetaAudio {
         .options(lofty::config::ParseOptions::new().read_properties(true))
         .guess_file_type()
     {
-        Ok(p)  => p,
+        Ok(p) => p,
         Err(_) => return meta,
     };
 
     let tagged_file: lofty::file::TaggedFile = match probe.read() {
-        Ok(f)  => f,
+        Ok(f) => f,
         Err(_) => return meta,
     };
 
     // ── Technical properties ──────────────────────────────────────────────
     let props = tagged_file.properties();
-    meta.duration_secs  = Some(props.duration().as_secs_f64());
-    meta.bitrate_kbps   = props.audio_bitrate();
+    meta.duration_secs = Some(props.duration().as_secs_f64());
+    meta.bitrate_kbps = props.audio_bitrate();
     meta.sample_rate_hz = props.sample_rate();
-    meta.channels       = props.channels();
+    meta.channels = props.channels();
 
     // ── Tags (ID3v2, Vorbis Comments, APE, MP4 atoms…) ───────────────────
-    if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
-        meta.title  = tag.title() .map(|s: std::borrow::Cow<str>| s.into_owned());
+    if let Some(tag) = tagged_file
+        .primary_tag()
+        .or_else(|| tagged_file.first_tag())
+    {
+        meta.title = tag.title().map(|s: std::borrow::Cow<str>| s.into_owned());
         meta.artist = tag.artist().map(|s: std::borrow::Cow<str>| s.into_owned());
-        meta.album  = tag.album() .map(|s: std::borrow::Cow<str>| s.into_owned());
-        meta.genre  = tag.genre() .map(|s: std::borrow::Cow<str>| s.into_owned());
-        meta.year         = tag.year();
+        meta.album = tag.album().map(|s: std::borrow::Cow<str>| s.into_owned());
+        meta.genre = tag.genre().map(|s: std::borrow::Cow<str>| s.into_owned());
+        meta.year = tag.year();
         meta.track_number = tag.track();
     }
 

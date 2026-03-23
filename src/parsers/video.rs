@@ -1,5 +1,5 @@
-use std::process::Command;
 use crate::models::MetaVideo;
+use std::process::Command;
 
 /// Extracts video metadata using `ffprobe` (part of FFmpeg).
 ///
@@ -13,8 +13,10 @@ pub fn parse_from_path(path: &str) -> MetaVideo {
     // Check ffprobe availability (OS-level implicit cache)
     let output = Command::new("ffprobe")
         .args([
-            "-v", "quiet",
-            "-print_format", "json",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_format",
             "-show_streams",
             path,
@@ -23,7 +25,7 @@ pub fn parse_from_path(path: &str) -> MetaVideo {
 
     let output = match output {
         Ok(o) if o.status.success() => o,
-        Ok(_) => return meta,  // ffprobe failed (corrupt file, etc.)
+        Ok(_) => return meta, // ffprobe failed (corrupt file, etc.)
         Err(_) => {
             // ffprobe not installed — continue without video metadata
             return meta;
@@ -31,15 +33,13 @@ pub fn parse_from_path(path: &str) -> MetaVideo {
     };
 
     let json: serde_json::Value = match serde_json::from_slice(&output.stdout) {
-        Ok(v)  => v,
+        Ok(v) => v,
         Err(_) => return meta,
     };
 
     // ── Format (container info) ───────────────────────────────────────────
     if let Some(fmt) = json.get("format") {
-        meta.duration_secs = fmt["duration"]
-            .as_str()
-            .and_then(|s| s.parse::<f64>().ok());
+        meta.duration_secs = fmt["duration"].as_str().and_then(|s| s.parse::<f64>().ok());
 
         meta.bitrate_kbps = fmt["bit_rate"]
             .as_str()
@@ -52,11 +52,13 @@ pub fn parse_from_path(path: &str) -> MetaVideo {
 
         // Container tags (title, year…)
         if let Some(tags) = fmt.get("tags") {
-            meta.title = tags["title"].as_str()
+            meta.title = tags["title"]
+                .as_str()
                 .or_else(|| tags["TITLE"].as_str())
                 .map(str::to_string);
 
-            meta.year = tags["date"].as_str()
+            meta.year = tags["date"]
+                .as_str()
                 .or_else(|| tags["DATE"].as_str())
                 .and_then(|s| s.get(..4))
                 .and_then(|s| s.parse::<u32>().ok());
@@ -70,14 +72,12 @@ pub fn parse_from_path(path: &str) -> MetaVideo {
 
             match codec_type {
                 "video" if meta.width.is_none() => {
-                    meta.width      = stream["width"].as_u64().map(|v| v as u32);
-                    meta.height     = stream["height"].as_u64().map(|v| v as u32);
+                    meta.width = stream["width"].as_u64().map(|v| v as u32);
+                    meta.height = stream["height"].as_u64().map(|v| v as u32);
                     meta.codec_video = stream["codec_name"].as_str().map(str::to_string);
 
                     // FPS: comes as a fraction "24000/1001" or "30/1"
-                    meta.fps = stream["r_frame_rate"]
-                        .as_str()
-                        .and_then(parse_fraction);
+                    meta.fps = stream["r_frame_rate"].as_str().and_then(parse_fraction);
                 }
                 "audio" if meta.codec_audio.is_none() => {
                     meta.codec_audio = stream["codec_name"].as_str().map(str::to_string);
@@ -95,7 +95,9 @@ fn parse_fraction(s: &str) -> Option<f64> {
     let mut parts = s.splitn(2, '/');
     let num: f64 = parts.next()?.parse().ok()?;
     let den: f64 = parts.next()?.parse().ok()?;
-    if den == 0.0 { return None; }
+    if den == 0.0 {
+        return None;
+    }
     Some(num / den)
 }
 

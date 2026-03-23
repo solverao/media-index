@@ -1,27 +1,35 @@
-use std::sync::mpsc;
 use eframe::egui;
-use egui_extras::{TableBuilder, Column};
-use humansize::{format_size, DECIMAL};
+use egui_extras::{Column, TableBuilder};
+use humansize::{DECIMAL, format_size};
+use std::sync::mpsc;
 
-use crate::db::{SearchResult, SearchDetail};
 use super::TaskResult;
+use crate::db::{SearchDetail, SearchResult};
 
 #[derive(Default)]
 pub struct BrowserState {
-    pub results:      Vec<SearchResult>,
-    query:            String,
-    type_filter:      TypeFilter,
-    selected:         Option<usize>,
+    pub results: Vec<SearchResult>,
+    query: String,
+    type_filter: TypeFilter,
+    selected: Option<usize>,
 }
 
 #[derive(Default, PartialEq, Clone, Copy)]
-enum TypeFilter { #[default] All, Td, Video, Audio, Image, Other }
+enum TypeFilter {
+    #[default]
+    All,
+    Td,
+    Video,
+    Audio,
+    Image,
+    Other,
+}
 
 impl TypeFilter {
     fn label(self) -> &'static str {
         match self {
-            Self::All   => "Todos",
-            Self::Td    => "3D",
+            Self::All => "Todos",
+            Self::Td => "3D",
             Self::Video => "Video",
             Self::Audio => "Audio",
             Self::Image => "Imagen",
@@ -30,8 +38,8 @@ impl TypeFilter {
     }
     fn as_db_str(self) -> Option<&'static str> {
         match self {
-            Self::All   => None,
-            Self::Td    => Some("3d"),
+            Self::All => None,
+            Self::Td => Some("3d"),
             Self::Video => Some("video"),
             Self::Audio => Some("audio"),
             Self::Image => Some("image"),
@@ -41,11 +49,11 @@ impl TypeFilter {
 }
 
 pub fn show(
-    ui:      &mut egui::Ui,
-    state:   &mut BrowserState,
-    ctx:     &egui::Context,
+    ui: &mut egui::Ui,
+    state: &mut BrowserState,
+    ctx: &egui::Context,
     db_path: &str,
-    tx:      &mpsc::Sender<TaskResult>,
+    tx: &mpsc::Sender<TaskResult>,
 ) {
     ui.heading("📁 Explorador de archivos");
     ui.separator();
@@ -67,10 +75,18 @@ pub fn show(
 
         ui.separator();
         ui.label("Tipo:");
-        for filter in [TypeFilter::All, TypeFilter::Td, TypeFilter::Video,
-                        TypeFilter::Audio, TypeFilter::Image, TypeFilter::Other]
-        {
-            if ui.selectable_label(state.type_filter == filter, filter.label()).clicked() {
+        for filter in [
+            TypeFilter::All,
+            TypeFilter::Td,
+            TypeFilter::Video,
+            TypeFilter::Audio,
+            TypeFilter::Image,
+            TypeFilter::Other,
+        ] {
+            if ui
+                .selectable_label(state.type_filter == filter, filter.label())
+                .clicked()
+            {
                 state.type_filter = filter;
             }
         }
@@ -114,15 +130,23 @@ fn show_table(ui: &mut egui::Ui, state: &mut BrowserState) {
         .striped(true)
         .resizable(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::initial(60.0).at_least(40.0))   // Tipo
-        .column(Column::initial(220.0).at_least(80.0))  // Nombre
-        .column(Column::initial(80.0))                  // Tamaño
-        .column(Column::remainder().at_least(100.0))    // Ruta
+        .column(Column::initial(60.0).at_least(40.0)) // Tipo
+        .column(Column::initial(220.0).at_least(80.0)) // Nombre
+        .column(Column::initial(80.0)) // Tamaño
+        .column(Column::remainder().at_least(100.0)) // Ruta
         .header(22.0, |mut h| {
-            h.col(|ui| { ui.strong("Tipo"); });
-            h.col(|ui| { ui.strong("Nombre"); });
-            h.col(|ui| { ui.strong("Tamaño"); });
-            h.col(|ui| { ui.strong("Ruta"); });
+            h.col(|ui| {
+                ui.strong("Tipo");
+            });
+            h.col(|ui| {
+                ui.strong("Nombre");
+            });
+            h.col(|ui| {
+                ui.strong("Tamaño");
+            });
+            h.col(|ui| {
+                ui.strong("Ruta");
+            });
         })
         .body(|mut body| {
             for (i, r) in state.results.iter().enumerate() {
@@ -168,24 +192,52 @@ fn show_detail(ui: &mut egui::Ui, r: &SearchResult) {
             detail_row(ui, "Extensión", &r.extension.to_uppercase());
 
             match &r.detail {
-                SearchDetail::Audio { duration, artist, title, album } => {
-                    if let Some(d) = duration { detail_row(ui, "Duración", &fmt_duration(*d)); }
-                    if let Some(a) = artist   { detail_row(ui, "Artista", a); }
-                    if let Some(t) = title    { detail_row(ui, "Título", t); }
-                    if let Some(a) = album    { detail_row(ui, "Álbum", a); }
+                SearchDetail::Audio {
+                    duration,
+                    artist,
+                    title,
+                    album,
+                } => {
+                    if let Some(d) = duration {
+                        detail_row(ui, "Duración", &fmt_duration(*d));
+                    }
+                    if let Some(a) = artist {
+                        detail_row(ui, "Artista", a);
+                    }
+                    if let Some(t) = title {
+                        detail_row(ui, "Título", t);
+                    }
+                    if let Some(a) = album {
+                        detail_row(ui, "Álbum", a);
+                    }
                 }
-                SearchDetail::Video { duration, width, height, title } => {
-                    if let Some(d) = duration { detail_row(ui, "Duración", &fmt_duration(*d)); }
+                SearchDetail::Video {
+                    duration,
+                    width,
+                    height,
+                    title,
+                } => {
+                    if let Some(d) = duration {
+                        detail_row(ui, "Duración", &fmt_duration(*d));
+                    }
                     if let (Some(w), Some(h)) = (width, height) {
                         detail_row(ui, "Resolución", &format!("{w}×{h}"));
                     }
-                    if let Some(t) = title { detail_row(ui, "Título", t); }
+                    if let Some(t) = title {
+                        detail_row(ui, "Título", t);
+                    }
                 }
-                SearchDetail::Image { width, height, camera } => {
+                SearchDetail::Image {
+                    width,
+                    height,
+                    camera,
+                } => {
                     if let (Some(w), Some(h)) = (width, height) {
                         detail_row(ui, "Dimensiones", &format!("{w}×{h} px"));
                     }
-                    if let Some(c) = camera { detail_row(ui, "Cámara", c); }
+                    if let Some(c) = camera {
+                        detail_row(ui, "Cámara", c);
+                    }
                 }
                 SearchDetail::Print3D { triangles } => {
                     if let Some(t) = triangles {
@@ -198,9 +250,11 @@ fn show_detail(ui: &mut egui::Ui, r: &SearchResult) {
 
     ui.add_space(8.0);
     ui.label(egui::RichText::new("Ruta").weak());
-    egui::ScrollArea::vertical().max_height(80.0).show(ui, |ui| {
-        ui.label(egui::RichText::new(&r.path).weak().size(11.0));
-    });
+    egui::ScrollArea::vertical()
+        .max_height(80.0)
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(&r.path).weak().size(11.0));
+        });
 
     ui.add_space(8.0);
     if ui.button("📋 Copiar ruta").clicked() {
@@ -224,31 +278,34 @@ fn detail_row(ui: &mut egui::Ui, label: &str, value: &str) {
 
 fn type_badge(t: &str) -> (&'static str, egui::Color32) {
     match t {
-        "3d"    => ("[3D]",  egui::Color32::from_rgb(80, 210, 210)),
+        "3d" => ("[3D]", egui::Color32::from_rgb(80, 210, 210)),
         "video" => ("[VID]", egui::Color32::from_rgb(80, 140, 255)),
         "audio" => ("[AUD]", egui::Color32::from_rgb(200, 90, 255)),
         "image" => ("[IMG]", egui::Color32::from_rgb(255, 210, 50)),
         "other" => ("[OTR]", egui::Color32::GRAY),
-        _       => ("[?]",   egui::Color32::WHITE),
+        _ => ("[?]", egui::Color32::WHITE),
     }
 }
 
 fn fmt_duration(secs: f64) -> String {
     let s = secs as u64;
-    if s >= 3600 { format!("{}h {:02}m {:02}s", s/3600, (s%3600)/60, s%60) }
-    else          { format!("{}m {:02}s", s/60, s%60) }
+    if s >= 3600 {
+        format!("{}h {:02}m {:02}s", s / 3600, (s % 3600) / 60, s % 60)
+    } else {
+        format!("{}m {:02}s", s / 60, s % 60)
+    }
 }
 
 fn do_search(
-    ctx:     egui::Context,
+    ctx: egui::Context,
     db_path: &str,
-    query:   &str,
-    filter:  TypeFilter,
-    tx:      &mpsc::Sender<TaskResult>,
+    query: &str,
+    filter: TypeFilter,
+    tx: &mpsc::Sender<TaskResult>,
 ) {
     let db_path = db_path.to_string();
-    let query   = query.to_string();
-    let tx      = tx.clone();
+    let query = query.to_string();
+    let tx = tx.clone();
     std::thread::spawn(move || {
         let result = crate::db::Database::open(&db_path)
             .and_then(|db| db.search(&query, filter.as_db_str()))

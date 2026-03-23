@@ -6,24 +6,24 @@ mod parsers;
 mod scanner;
 mod thumbs;
 
-use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use colored::Colorize;
-use humansize::{format_size, DECIMAL};
+use humansize::{DECIMAL, format_size};
 use indicatif::{ProgressBar, ProgressStyle};
+use std::path::PathBuf;
 
 use db::Database;
-use scanner::Scanner;
 use parsers::video::ffprobe_available;
+use scanner::Scanner;
 
 // ── CLI ───────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
 #[command(
-    name    = "media-index",
-    about   = "3D, video, audio and image file indexer with deduplication",
-    version = "0.1.0",
+    name = "media-index",
+    about = "3D, video, audio and image file indexer with deduplication",
+    version = "0.1.0"
 )]
 struct Cli {
     #[arg(short, long, default_value = "media.db")]
@@ -187,12 +187,18 @@ enum Commands {
 }
 
 #[derive(Clone, ValueEnum)]
-enum MediaTypeArg { Td, Video, Audio, Image, Other }
+enum MediaTypeArg {
+    Td,
+    Video,
+    Audio,
+    Image,
+    Other,
+}
 
 impl MediaTypeArg {
     fn as_db_str(&self) -> &'static str {
         match self {
-            Self::Td    => "3d",
+            Self::Td => "3d",
             Self::Video => "video",
             Self::Audio => "audio",
             Self::Image => "image",
@@ -202,7 +208,10 @@ impl MediaTypeArg {
 }
 
 #[derive(Clone, ValueEnum)]
-enum SimilarKind { Images, Audio }
+enum SimilarKind {
+    Images,
+    Audio,
+}
 
 // ── Main ──────────────────────────────────────────────────────────────────
 
@@ -212,7 +221,7 @@ fn main() -> Result<()> {
     // No subcommand → launch the graphical interface
     let command = match cli.command {
         Some(c) => c,
-        None    => return gui::run(&cli.db),
+        None => return gui::run(&cli.db),
     };
 
     // Clear does not need to open (or create) the DB
@@ -223,23 +232,65 @@ fn main() -> Result<()> {
     let db = Database::open(&cli.db)?;
 
     match command {
-        Commands::Scan { path, verbose, no_archives }  => cmd_scan(db, &path, verbose, no_archives),
-        Commands::Watch { path, verbose, debounce, no_archives } => cmd_watch(db, &path, verbose, debounce, no_archives),
-        Commands::Stats                   => cmd_stats(db),
-        Commands::Dupes { r#type, json, delete, dry_run, aggressive, prefer_archive, keep } =>
-            cmd_dupes(db, r#type, json, delete, dry_run, aggressive, prefer_archive, keep),
+        Commands::Scan {
+            path,
+            verbose,
+            no_archives,
+        } => cmd_scan(db, &path, verbose, no_archives),
+        Commands::Watch {
+            path,
+            verbose,
+            debounce,
+            no_archives,
+        } => cmd_watch(db, &path, verbose, debounce, no_archives),
+        Commands::Stats => cmd_stats(db),
+        Commands::Dupes {
+            r#type,
+            json,
+            delete,
+            dry_run,
+            aggressive,
+            prefer_archive,
+            keep,
+        } => cmd_dupes(
+            db,
+            r#type,
+            json,
+            delete,
+            dry_run,
+            aggressive,
+            prefer_archive,
+            keep,
+        ),
         Commands::Search { query, r#type } => cmd_search(db, &query, r#type),
-        Commands::Export { output }        => cmd_export(db, &output),
-        Commands::Doctor                   => cmd_doctor(),
-        Commands::Verify { prune, quiet }  => cmd_verify(db, prune, quiet),
-        Commands::Clean { macos_junk }     => cmd_clean(db, macos_junk),
-        Commands::Thumbs { r#type, size, quality, force, verbose } =>
-            cmd_thumbs(db, &cli.db, r#type, size, quality, force, verbose),
-        Commands::Similar { kind, threshold, json } => cmd_similar(db, kind, threshold, json),
-        Commands::Empty { path, dirs_only, files_only, delete, dry_run } =>
-            cmd_empty(&path, dirs_only, files_only, delete, dry_run),
-        Commands::Broken { path, delete, dry_run } =>
-            cmd_broken(&path, delete, dry_run),
+        Commands::Export { output } => cmd_export(db, &output),
+        Commands::Doctor => cmd_doctor(),
+        Commands::Verify { prune, quiet } => cmd_verify(db, prune, quiet),
+        Commands::Clean { macos_junk } => cmd_clean(db, macos_junk),
+        Commands::Thumbs {
+            r#type,
+            size,
+            quality,
+            force,
+            verbose,
+        } => cmd_thumbs(db, &cli.db, r#type, size, quality, force, verbose),
+        Commands::Similar {
+            kind,
+            threshold,
+            json,
+        } => cmd_similar(db, kind, threshold, json),
+        Commands::Empty {
+            path,
+            dirs_only,
+            files_only,
+            delete,
+            dry_run,
+        } => cmd_empty(&path, dirs_only, files_only, delete, dry_run),
+        Commands::Broken {
+            path,
+            delete,
+            dry_run,
+        } => cmd_broken(&path, delete, dry_run),
         Commands::Clear { .. } => unreachable!(),
     }
 }
@@ -252,8 +303,10 @@ fn cmd_scan(db: Database, path: &std::path::Path, verbose: bool, no_archives: bo
     }
 
     if !ffprobe_available() {
-        println!("{} ffprobe not found — video metadata unavailable",
-            "⚠".yellow());
+        println!(
+            "{} ffprobe not found — video metadata unavailable",
+            "⚠".yellow()
+        );
         println!("  Install: sudo apt install ffmpeg  /  brew install ffmpeg\n");
     }
 
@@ -264,42 +317,63 @@ fn cmd_scan(db: Database, path: &std::path::Path, verbose: bool, no_archives: bo
     println!("{}", format!("Scanning: {}", path.display()).bold().cyan());
 
     let scanner = Scanner::new(db, verbose, no_archives);
-    let s       = scanner.scan(path)?;
+    let s = scanner.scan(path)?;
 
-    println!("\n{}", "─── Result ───────────────────────────────────".dimmed());
-    println!("  {} 3D files",   s.indexed_3d.to_string().green().bold());
-    println!("  {} videos",     s.indexed_video.to_string().blue().bold());
-    println!("  {} audio",      s.indexed_audio.to_string().magenta().bold());
-    println!("  {} images",     s.indexed_image.to_string().yellow().bold());
-    println!("  {} other",      s.indexed_other.to_string().white().bold());
-    println!("  {} archives",   s.archives_opened.to_string().dimmed());
-    println!("  {} duplicates ({})", s.duplicates.to_string().red().bold(),
-        format_size(s.bytes_dup, DECIMAL).red());
+    println!(
+        "\n{}",
+        "─── Result ───────────────────────────────────".dimmed()
+    );
+    println!("  {} 3D files", s.indexed_3d.to_string().green().bold());
+    println!("  {} videos", s.indexed_video.to_string().blue().bold());
+    println!("  {} audio", s.indexed_audio.to_string().magenta().bold());
+    println!("  {} images", s.indexed_image.to_string().yellow().bold());
+    println!("  {} other", s.indexed_other.to_string().white().bold());
+    println!("  {} archives", s.archives_opened.to_string().dimmed());
+    println!(
+        "  {} duplicates ({})",
+        s.duplicates.to_string().red().bold(),
+        format_size(s.bytes_dup, DECIMAL).red()
+    );
     if s.skipped_cached > 0 {
-        println!("  {} unchanged (cached)",
-            s.skipped_cached.to_string().dimmed());
+        println!(
+            "  {} unchanged (cached)",
+            s.skipped_cached.to_string().dimmed()
+        );
     }
     if s.errors > 0 {
         println!("  {} errors", s.errors.to_string().red());
     }
     println!("  {}", "──────────────────────────────────────".dimmed());
-    println!("  {} indexed total", s.total_indexed().to_string().cyan().bold());
+    println!(
+        "  {} indexed total",
+        s.total_indexed().to_string().cyan().bold()
+    );
 
     if s.partial_hashes > 0 {
-        println!("\n  {} {} large file(s) partially hashed (>{}) — approximate deduplication",
+        println!(
+            "\n  {} {} large file(s) partially hashed (>{}) — approximate deduplication",
             "⚠".yellow(),
             s.partial_hashes.to_string().yellow(),
-            "100 MB".bold());
-        println!("  {} Use {} to detect false positives.",
+            "100 MB".bold()
+        );
+        println!(
+            "  {} Use {} to detect false positives.",
             " ".normal(),
-            "verify".bold());
+            "verify".bold()
+        );
     }
- 
+
     Ok(())
 }
 
-fn cmd_watch(db: Database, path: &std::path::Path, verbose: bool, debounce_secs: u64, no_archives: bool) -> Result<()> {
-    use notify_debouncer_mini::{new_debouncer, notify::RecursiveMode, DebouncedEventKind};
+fn cmd_watch(
+    db: Database,
+    path: &std::path::Path,
+    verbose: bool,
+    debounce_secs: u64,
+    no_archives: bool,
+) -> Result<()> {
+    use notify_debouncer_mini::{DebouncedEventKind, new_debouncer, notify::RecursiveMode};
     use std::time::Duration;
 
     if !path.exists() {
@@ -307,40 +381,52 @@ fn cmd_watch(db: Database, path: &std::path::Path, verbose: bool, debounce_secs:
     }
 
     if !ffprobe_available() {
-        println!("{} ffprobe not found — video metadata unavailable", "⚠".yellow());
+        println!(
+            "{} ffprobe not found — video metadata unavailable",
+            "⚠".yellow()
+        );
         println!("  Install: sudo apt install ffmpeg  /  brew install ffmpeg\n");
     }
 
     // Initial full scan
-    println!("{}", format!("Initial scan: {}", path.display()).bold().cyan());
+    println!(
+        "{}",
+        format!("Initial scan: {}", path.display()).bold().cyan()
+    );
     let scanner = Scanner::new(db, verbose, no_archives);
     let s = scanner.scan(path)?;
-    println!("  {} indexed  {} duplicates\n",
+    println!(
+        "  {} indexed  {} duplicates\n",
         s.total_indexed().to_string().cyan().bold(),
-        s.duplicates.to_string().red());
+        s.duplicates.to_string().red()
+    );
 
     let (tx, rx) = std::sync::mpsc::channel();
 
-    let mut debouncer = new_debouncer(
-        Duration::from_secs(debounce_secs),
-        move |res| { let _ = tx.send(res); },
-    )?;
+    let mut debouncer = new_debouncer(Duration::from_secs(debounce_secs), move |res| {
+        let _ = tx.send(res);
+    })?;
 
     debouncer.watcher().watch(path, RecursiveMode::Recursive)?;
 
-    println!("{} Watching {}  {}",
+    println!(
+        "{} Watching {}  {}",
         "👁",
         path.display().to_string().bold(),
-        format!("(debounce {}s — Ctrl+C to quit)", debounce_secs).dimmed());
+        format!("(debounce {}s — Ctrl+C to quit)", debounce_secs).dimmed()
+    );
 
     for events in rx {
         let events = match events {
-            Ok(e)  => e,
-            Err(e) => { eprintln!("{} Watcher error: {e:?}", "✗".red()); continue; }
+            Ok(e) => e,
+            Err(e) => {
+                eprintln!("{} Watcher error: {e:?}", "✗".red());
+                continue;
+            }
         };
 
         // Deduplicate paths in this batch
-        let mut to_index:  std::collections::HashSet<PathBuf> = Default::default();
+        let mut to_index: std::collections::HashSet<PathBuf> = Default::default();
         let mut had_remove = false;
 
         for event in events {
@@ -360,18 +446,21 @@ fn cmd_watch(db: Database, path: &std::path::Path, verbose: bool, debounce_secs:
         // Deletions → cleanup in DB
         if had_remove {
             match scanner.cleanup() {
-                Ok((f, d)) if f > 0 || d > 0 =>
-                    println!("  {} {} entry/ies removed from DB", "🧹", f + d),
+                Ok((f, d)) if f > 0 || d > 0 => {
+                    println!("  {} {} entry/ies removed from DB", "🧹", f + d)
+                }
                 _ => {}
             }
         }
 
         // New / modified → index
         for file_path in &to_index {
-            let ext = file_path.extension()
+            let ext = file_path
+                .extension()
                 .map(|e| e.to_string_lossy().to_lowercase())
                 .unwrap_or_default();
-            let name = file_path.file_name()
+            let name = file_path
+                .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
 
@@ -386,19 +475,41 @@ fn cmd_watch(db: Database, path: &std::path::Path, verbose: bool, debounce_secs:
 fn cmd_stats(db: Database) -> Result<()> {
     let s = db.stats()?;
 
-    println!("{}", "─── Collection ───────────────────────────────".bold().cyan());
+    println!(
+        "{}",
+        "─── Collection ───────────────────────────────"
+            .bold()
+            .cyan()
+    );
     println!("  Unique total   : {}", s.total.to_string().green().bold());
     println!("  Duplicates     : {}", s.dupes.to_string().red());
-    println!("  Total size     : {}", format_size(s.bytes as u64, DECIMAL).yellow());
-    println!("  Saved by dedup : {}", format_size(s.bytes_dup as u64, DECIMAL).red());
+    println!(
+        "  Total size     : {}",
+        format_size(s.bytes as u64, DECIMAL).yellow()
+    );
+    println!(
+        "  Saved by dedup : {}",
+        format_size(s.bytes_dup as u64, DECIMAL).red()
+    );
 
     println!("\n  {:>8}  {:>12}  {}", "Files", "Size", "Type");
     println!("  {}", "─".repeat(36).dimmed());
 
-    let icons = [("3d", "⬡"), ("video", "▶"), ("audio", "♪"), ("image", "🖼"), ("other", "·")];
+    let icons = [
+        ("3d", "⬡"),
+        ("video", "▶"),
+        ("audio", "♪"),
+        ("image", "🖼"),
+        ("other", "·"),
+    ];
     for (type_str, count, bytes) in &s.by_type {
-        let icon = icons.iter().find(|(k, _)| k == type_str).map(|(_, v)| *v).unwrap_or("·");
-        println!("  {:>8}  {:>12}  {} {}",
+        let icon = icons
+            .iter()
+            .find(|(k, _)| k == type_str)
+            .map(|(_, v)| *v)
+            .unwrap_or("·");
+        println!(
+            "  {:>8}  {:>12}  {} {}",
             count.to_string().cyan(),
             format_size(*bytes as u64, DECIMAL).dimmed(),
             icon,
@@ -410,24 +521,27 @@ fn cmd_stats(db: Database) -> Result<()> {
 }
 
 fn cmd_dupes(
-    db:             Database,
-    tipo:           Option<MediaTypeArg>,
-    as_json:        bool,
-    delete:         bool,
-    dry_run:        bool,
-    aggressive:     bool,
+    db: Database,
+    tipo: Option<MediaTypeArg>,
+    as_json: bool,
+    delete: bool,
+    dry_run: bool,
+    aggressive: bool,
     prefer_archive: bool,
-    keep:           Option<String>,
+    keep: Option<String>,
 ) -> Result<()> {
     use models::KeepRule;
 
     let keep_rule: Option<KeepRule> = match &keep {
-        None    => None,
+        None => None,
         Some(s) => match KeepRule::from_str(s) {
             Some(r) => Some(r),
-            None    => {
-                eprintln!("{} Unknown rule: '{}'. Options: oldest|newest|largest|smallest|shortest-path",
-                    "✗".red(), s);
+            None => {
+                eprintln!(
+                    "{} Unknown rule: '{}'. Options: oldest|newest|largest|smallest|shortest-path",
+                    "✗".red(),
+                    s
+                );
                 return Ok(());
             }
         },
@@ -446,28 +560,43 @@ fn cmd_dupes(
     }
 
     if as_json {
-        let json: Vec<_> = groups.iter().map(|g| serde_json::json!({
-            "hash":           g.hash,
-            "media_type":     g.media_type,
-            "canonical_name": g.canonical_name,
-            "canonical_path": g.canonical_path,
-            "size_bytes":     g.size_bytes,
-            "duplicates":     g.duplicates,
-        })).collect();
+        let json: Vec<_> = groups
+            .iter()
+            .map(|g| {
+                serde_json::json!({
+                    "hash":           g.hash,
+                    "media_type":     g.media_type,
+                    "canonical_name": g.canonical_name,
+                    "canonical_path": g.canonical_path,
+                    "size_bytes":     g.size_bytes,
+                    "duplicates":     g.duplicates,
+                })
+            })
+            .collect();
         println!("{}", serde_json::to_string_pretty(&json)?);
         return Ok(());
     }
 
-    let total_bytes: u64 = groups.iter()
+    let total_bytes: u64 = groups
+        .iter()
         .map(|g| g.size_bytes * g.duplicates.len() as u64)
         .sum();
 
-    println!("{} duplicate groups  —  {} reclaimable\n",
+    println!(
+        "{} duplicate groups  —  {} reclaimable\n",
         groups.len().to_string().red().bold(),
-        format_size(total_bytes, DECIMAL).red());
+        format_size(total_bytes, DECIMAL).red()
+    );
 
     if delete {
-        return cmd_dupes_delete(&db, &groups, dry_run, aggressive, prefer_archive, keep_rule.as_ref());
+        return cmd_dupes_delete(
+            &db,
+            &groups,
+            dry_run,
+            aggressive,
+            prefer_archive,
+            keep_rule.as_ref(),
+        );
     }
 
     // ── List only ─────────────────────────────────────────────────────────
@@ -480,36 +609,47 @@ fn cmd_dupes(
 
 fn print_dupe_group(g: &db::DuplicateGroup) {
     let type_badge = match g.media_type.as_str() {
-        "3d"    => "⬡ 3D".cyan(),
+        "3d" => "⬡ 3D".cyan(),
         "video" => "▶ VID".blue(),
         "audio" => "♪ AUD".magenta(),
         "image" => "🖼 IMG".yellow(),
         "other" => "· OTR".white(),
-        _       => "? ???".normal(),
+        _ => "? ???".normal(),
     };
-    println!("{} {} {} ({})",
-        "●".red(), type_badge, g.canonical_name.bold(),
-        format_size(g.size_bytes, DECIMAL).dimmed());
+    println!(
+        "{} {} {} ({})",
+        "●".red(),
+        type_badge,
+        g.canonical_name.bold(),
+        format_size(g.size_bytes, DECIMAL).dimmed()
+    );
     println!("  {}", &g.hash[..16].dimmed());
     println!("  {}", g.canonical_path.green());
     for d in &g.duplicates {
         let in_archive = d.contains("::");
-        let marker = if in_archive { "⊡".yellow() } else { "↳".red() };
+        let marker = if in_archive {
+            "⊡".yellow()
+        } else {
+            "↳".red()
+        };
         println!("  {} {}", marker, d.yellow());
     }
     println!();
 }
 
 fn cmd_dupes_delete(
-    db:             &Database,
-    groups:         &[db::DuplicateGroup],
-    dry_run:        bool,
-    aggressive:     bool,
+    db: &Database,
+    groups: &[db::DuplicateGroup],
+    dry_run: bool,
+    aggressive: bool,
     prefer_archive: bool,
-    keep_rule:      Option<&models::KeepRule>,
+    keep_rule: Option<&models::KeepRule>,
 ) -> Result<()> {
     if dry_run {
-        println!("{}", "  [DRY-RUN] No files will be modified.\n".yellow().bold());
+        println!(
+            "{}",
+            "  [DRY-RUN] No files will be modified.\n".yellow().bold()
+        );
     }
 
     if let Some(rule) = keep_rule {
@@ -528,22 +668,24 @@ fn cmd_dupes_delete(
             // Keep only loose files (not inside archives) so we can read
             // their filesystem metadata
             let loose: Vec<&String> = all.iter().filter(|p| !p.contains("::")).collect();
-            if loose.is_empty() { continue; }
+            if loose.is_empty() {
+                continue;
+            }
 
             // Choose the winner according to the rule
             let winner = match rule {
-                models::KeepRule::Oldest => loose.iter().min_by_key(|p| {
-                    std::fs::metadata(p).and_then(|m| m.modified()).ok()
-                }),
-                models::KeepRule::Newest => loose.iter().max_by_key(|p| {
-                    std::fs::metadata(p).and_then(|m| m.modified()).ok()
-                }),
-                models::KeepRule::Largest => loose.iter().max_by_key(|p| {
-                    std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
-                }),
-                models::KeepRule::Smallest => loose.iter().min_by_key(|p| {
-                    std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)
-                }),
+                models::KeepRule::Oldest => loose
+                    .iter()
+                    .min_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok()),
+                models::KeepRule::Newest => loose
+                    .iter()
+                    .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok()),
+                models::KeepRule::Largest => loose
+                    .iter()
+                    .max_by_key(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)),
+                models::KeepRule::Smallest => loose
+                    .iter()
+                    .min_by_key(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0)),
                 models::KeepRule::ShortestPath => loose.iter().min_by_key(|p| p.len()),
             };
 
@@ -561,17 +703,21 @@ fn cmd_dupes_delete(
 
     // Classify each duplicate_path as: loose file vs. inside archive
     struct DeletePlan {
-        path:         String,         // full duplicate_path
+        path: String,                 // full duplicate_path
         archive_path: Option<String>, // Some("/a/b.zip") if "b.zip::foo.jpg"
     }
 
     // If a KeepRule was given, plans come from it. Otherwise, use the normal duplicates.
     let plans: Vec<DeletePlan> = match &plans_from_keep {
-        Some(paths) => paths.iter().map(|p| DeletePlan {
-            path: p.clone(),
-            archive_path: None,
-        }).collect(),
-        None => groups.iter()
+        Some(paths) => paths
+            .iter()
+            .map(|p| DeletePlan {
+                path: p.clone(),
+                archive_path: None,
+            })
+            .collect(),
+        None => groups
+            .iter()
             .flat_map(|g| g.duplicates.iter())
             .map(|d| {
                 let archive_path = if d.contains("::") {
@@ -579,15 +725,18 @@ fn cmd_dupes_delete(
                 } else {
                     None
                 };
-                DeletePlan { path: d.clone(), archive_path }
+                DeletePlan {
+                    path: d.clone(),
+                    archive_path,
+                }
             })
             .collect(),
     };
 
     // ── --prefer-archive: loose canonicals that already live in an archive ──
-    let mut deleted_files     = 0usize;
-    let mut freed_bytes       = 0u64;
-    let mut errors_delete     = 0usize;
+    let mut deleted_files = 0usize;
+    let mut freed_bytes = 0u64;
+    let mut errors_delete = 0usize;
     // Paths of canonicals deleted in this step — needed so that
     // --aggressive does not assume the archive is the only copy when
     // the canonical was just deleted in the same run.
@@ -596,43 +745,49 @@ fn cmd_dupes_delete(
     if prefer_archive {
         for g in groups {
             let canonical_is_loose = !g.canonical_path.contains("::");
-            let all_dupes_in_archive = !g.duplicates.is_empty()
-                && g.duplicates.iter().all(|d| d.contains("::"));
+            let all_dupes_in_archive =
+                !g.duplicates.is_empty() && g.duplicates.iter().all(|d| d.contains("::"));
 
             if canonical_is_loose && all_dupes_in_archive {
                 let p = std::path::Path::new(&g.canonical_path);
                 let size = p.metadata().map(|m| m.len()).unwrap_or(0);
                 if dry_run {
-                    freed_bytes   += size;
+                    freed_bytes += size;
                     deleted_files += 1;
                     deleted_canonicals.insert(g.canonical_path.clone());
-                    println!("  {} {} {}",
+                    println!(
+                        "  {} {} {}",
                         "~".cyan(),
                         g.canonical_path.dimmed(),
-                        "(loose canonical — copy in archive)".dimmed());
+                        "(loose canonical — copy in archive)".dimmed()
+                    );
                 } else {
                     match p.metadata() {
-                        Ok(meta) => {
-                            match std::fs::remove_file(p) {
-                                Ok(_) => {
-                                    freed_bytes   += meta.len();
-                                    deleted_files += 1;
-                                    deleted_canonicals.insert(g.canonical_path.clone());
-                                    println!("  {} {} {}",
-                                        "✓".green(),
-                                        g.canonical_path.dimmed(),
-                                        "(loose canonical — copy in archive)".dimmed());
-                                }
-                                Err(e) => {
-                                    errors_delete += 1;
-                                    eprintln!("  {} {}: {e}", "✗".red(), g.canonical_path);
-                                }
+                        Ok(meta) => match std::fs::remove_file(p) {
+                            Ok(_) => {
+                                freed_bytes += meta.len();
+                                deleted_files += 1;
+                                deleted_canonicals.insert(g.canonical_path.clone());
+                                println!(
+                                    "  {} {} {}",
+                                    "✓".green(),
+                                    g.canonical_path.dimmed(),
+                                    "(loose canonical — copy in archive)".dimmed()
+                                );
                             }
-                        }
+                            Err(e) => {
+                                errors_delete += 1;
+                                eprintln!("  {} {}: {e}", "✗".red(), g.canonical_path);
+                            }
+                        },
                         Err(_) => {
                             deleted_files += 1;
                             deleted_canonicals.insert(g.canonical_path.clone());
-                            println!("  {} {} (no longer existed)", "·".dimmed(), g.canonical_path.dimmed());
+                            println!(
+                                "  {} {} (no longer existed)",
+                                "·".dimmed(),
+                                g.canonical_path.dimmed()
+                            );
                         }
                     }
                 }
@@ -647,27 +802,29 @@ fn cmd_dupes_delete(
         let p = std::path::Path::new(&plan.path);
         let size = p.metadata().map(|m| m.len()).unwrap_or(0);
         if dry_run {
-            freed_bytes   += size;
+            freed_bytes += size;
             deleted_files += 1;
             println!("  {} {}", "~".cyan(), plan.path.dimmed());
         } else {
             match p.metadata() {
-                Ok(meta) => {
-                    match std::fs::remove_file(p) {
-                        Ok(_) => {
-                            freed_bytes   += meta.len();
-                            deleted_files += 1;
-                            println!("  {} {}", "✓".green(), plan.path.dimmed());
-                        }
-                        Err(e) => {
-                            errors_delete += 1;
-                            eprintln!("  {} {}: {e}", "✗".red(), plan.path);
-                        }
+                Ok(meta) => match std::fs::remove_file(p) {
+                    Ok(_) => {
+                        freed_bytes += meta.len();
+                        deleted_files += 1;
+                        println!("  {} {}", "✓".green(), plan.path.dimmed());
                     }
-                }
+                    Err(e) => {
+                        errors_delete += 1;
+                        eprintln!("  {} {}: {e}", "✗".red(), plan.path);
+                    }
+                },
                 Err(_) => {
                     deleted_files += 1;
-                    println!("  {} {} (no longer existed)", "·".dimmed(), plan.path.dimmed());
+                    println!(
+                        "  {} {} (no longer existed)",
+                        "·".dimmed(),
+                        plan.path.dimmed()
+                    );
                 }
             }
         }
@@ -677,15 +834,19 @@ fn cmd_dupes_delete(
     let in_archives: Vec<&DeletePlan> = plans.iter().filter(|p| p.archive_path.is_some()).collect();
 
     if !in_archives.is_empty() && !aggressive {
-        println!("\n{} {} duplicate(s) inside archives — left untouched:",
+        println!(
+            "\n{} {} duplicate(s) inside archives — left untouched:",
             "⊡".yellow().bold(),
-            in_archives.len().to_string().yellow());
+            in_archives.len().to_string().yellow()
+        );
         for plan in &in_archives {
             println!("  {} {}", "·".yellow(), plan.path.yellow());
         }
-        println!("  {} Use {} to delete the archive if all its files are duplicates.",
+        println!(
+            "  {} Use {} to delete the archive if all its files are duplicates.",
             "→".dimmed(),
-            "--aggressive".bold());
+            "--aggressive".bold()
+        );
     }
 
     // ── Aggressive mode: delete whole archives if all their content has copies ──
@@ -708,19 +869,25 @@ fn cmd_dupes_delete(
         loop {
             let prev_len = to_delete.len();
             for archive_path in by_archive.keys() {
-                if to_delete.contains(archive_path) { continue; }
+                if to_delete.contains(archive_path) {
+                    continue;
+                }
                 let arc = std::path::Path::new(archive_path);
                 if !arc.exists() {
                     to_delete.insert(archive_path.clone());
                     continue;
                 }
                 match db.can_safely_delete_archive(archive_path, &deleted_canonicals, &to_delete) {
-                    Ok(true)  => { to_delete.insert(archive_path.clone()); }
+                    Ok(true) => {
+                        to_delete.insert(archive_path.clone());
+                    }
                     Ok(false) => {}
-                    Err(e)    => eprintln!("  {} {}: {e}", "✗".red(), archive_path),
+                    Err(e) => eprintln!("  {} {}: {e}", "✗".red(), archive_path),
                 }
             }
-            if to_delete.len() == prev_len { break; } // fixpoint reached
+            if to_delete.len() == prev_len {
+                break;
+            } // fixpoint reached
         }
 
         // Execute (or simulate) deletions
@@ -728,7 +895,11 @@ fn cmd_dupes_delete(
             let arc = std::path::Path::new(archive_path);
 
             if !arc.exists() {
-                println!("  {} {} (no longer existed)", "·".dimmed(), archive_path.dimmed());
+                println!(
+                    "  {} {} (no longer existed)",
+                    "·".dimmed(),
+                    archive_path.dimmed()
+                );
                 deleted_archives += 1;
                 continue;
             }
@@ -736,21 +907,25 @@ fn cmd_dupes_delete(
             if to_delete.contains(archive_path) {
                 let bytes = arc.metadata().map(|m| m.len()).unwrap_or(0);
                 if dry_run {
-                    freed_bytes      += bytes;
+                    freed_bytes += bytes;
                     deleted_archives += 1;
-                    println!("  {} {} {}",
+                    println!(
+                        "  {} {} {}",
                         "~".cyan(),
                         "full archive:".dimmed(),
-                        archive_path.dimmed());
+                        archive_path.dimmed()
+                    );
                 } else {
                     match std::fs::remove_file(arc) {
                         Ok(_) => {
-                            freed_bytes      += bytes;
+                            freed_bytes += bytes;
                             deleted_archives += 1;
-                            println!("  {} {} {}",
+                            println!(
+                                "  {} {} {}",
                                 "✓".green(),
                                 "full archive:".dimmed(),
-                                archive_path.dimmed());
+                                archive_path.dimmed()
+                            );
                         }
                         Err(e) => {
                             errors_delete += 1;
@@ -759,32 +934,55 @@ fn cmd_dupes_delete(
                     }
                 }
             } else {
-                println!("  {} {} — has unique files or is the only copy, skipping ({} duplicate(s) inside)",
+                println!(
+                    "  {} {} — has unique files or is the only copy, skipping ({} duplicate(s) inside)",
                     "⊡".yellow(),
                     archive_path.yellow(),
-                    dup_count);
+                    dup_count
+                );
             }
         }
     }
 
     // ── Summary ────────────────────────────────────────────────────────────
-    println!("\n{}", "─── Result ───────────────────────────────────".dimmed());
+    println!(
+        "\n{}",
+        "─── Result ───────────────────────────────────".dimmed()
+    );
     if dry_run {
-        println!("  {} {}", "[DRY-RUN]".cyan().bold(),
-            "nothing deleted — run without --dry-run to apply".dimmed());
+        println!(
+            "  {} {}",
+            "[DRY-RUN]".cyan().bold(),
+            "nothing deleted — run without --dry-run to apply".dimmed()
+        );
         if deleted_files > 0 {
-            println!("  {} file(s) would be deleted", deleted_files.to_string().cyan().bold());
+            println!(
+                "  {} file(s) would be deleted",
+                deleted_files.to_string().cyan().bold()
+            );
         }
         if deleted_archives > 0 {
-            println!("  {} archive(s) would be deleted", deleted_archives.to_string().cyan().bold());
+            println!(
+                "  {} archive(s) would be deleted",
+                deleted_archives.to_string().cyan().bold()
+            );
         }
-        println!("  {} would be freed", format_size(freed_bytes, DECIMAL).cyan().bold());
+        println!(
+            "  {} would be freed",
+            format_size(freed_bytes, DECIMAL).cyan().bold()
+        );
     } else {
         if deleted_files > 0 {
-            println!("  {} file(s) deleted", deleted_files.to_string().green().bold());
+            println!(
+                "  {} file(s) deleted",
+                deleted_files.to_string().green().bold()
+            );
         }
         if deleted_archives > 0 {
-            println!("  {} archive(s) deleted", deleted_archives.to_string().green().bold());
+            println!(
+                "  {} archive(s) deleted",
+                deleted_archives.to_string().green().bold()
+            );
         }
         println!("  {} freed", format_size(freed_bytes, DECIMAL).red().bold());
         if errors_delete > 0 {
@@ -793,9 +991,12 @@ fn cmd_dupes_delete(
         // Sync the DB with what was just deleted from disk
         if deleted_files > 0 || deleted_archives > 0 {
             match db.cleanup_stale() {
-                Ok((f, d)) if f > 0 || d > 0 =>
-                    println!("  {} DB synced ({} entry/ies removed)", "🧹".dimmed(), f + d),
-                Ok(_)  => {}
+                Ok((f, d)) if f > 0 || d > 0 => println!(
+                    "  {} DB synced ({} entry/ies removed)",
+                    "🧹".dimmed(),
+                    f + d
+                ),
+                Ok(_) => {}
                 Err(e) => eprintln!("  {} Error syncing DB: {e}", "✗".red()),
             }
         }
@@ -819,48 +1020,87 @@ fn cmd_search(db: Database, query: &str, tipo: Option<MediaTypeArg>) -> Result<(
 
     for r in &results {
         let badge = match r.media_type.as_str() {
-            "3d"    => "[3D]".cyan(),
+            "3d" => "[3D]".cyan(),
             "video" => "[VID]".blue(),
             "audio" => "[AUD]".magenta(),
             "image" => "[IMG]".yellow(),
             "other" => "[OTR]".white(),
-            _       => "[?]".normal(),
+            _ => "[?]".normal(),
         };
 
-        println!("{} {} {}",
-            "▸".cyan(), badge, r.name.bold());
+        println!("{} {} {}", "▸".cyan(), badge, r.name.bold());
         println!("  {}", r.path.dimmed());
 
         let detail = &r.detail;
         let info: Vec<String> = match detail {
-            SearchDetail::Audio { duration, artist, title, album } => {
+            SearchDetail::Audio {
+                duration,
+                artist,
+                title,
+                album,
+            } => {
                 let mut v = vec![format_size(r.size_bytes, DECIMAL)];
-                if let Some(d) = duration { v.push(fmt_duration(*d)); }
-                if let Some(a) = artist   { v.push(a.clone()); }
-                if let Some(t) = title    { v.push(t.clone()); }
-                if let Some(al) = album   { v.push(al.clone()); }
+                if let Some(d) = duration {
+                    v.push(fmt_duration(*d));
+                }
+                if let Some(a) = artist {
+                    v.push(a.clone());
+                }
+                if let Some(t) = title {
+                    v.push(t.clone());
+                }
+                if let Some(al) = album {
+                    v.push(al.clone());
+                }
                 v
             }
-            SearchDetail::Video { duration, width, height, title } => {
+            SearchDetail::Video {
+                duration,
+                width,
+                height,
+                title,
+            } => {
                 let mut v = vec![format_size(r.size_bytes, DECIMAL)];
-                if let Some(d) = duration { v.push(fmt_duration(*d)); }
-                if let (Some(w), Some(h)) = (width, height) { v.push(format!("{w}×{h}")); }
-                if let Some(t) = title { v.push(t.clone()); }
+                if let Some(d) = duration {
+                    v.push(fmt_duration(*d));
+                }
+                if let (Some(w), Some(h)) = (width, height) {
+                    v.push(format!("{w}×{h}"));
+                }
+                if let Some(t) = title {
+                    v.push(t.clone());
+                }
                 v
             }
-            SearchDetail::Image { width, height, camera } => {
+            SearchDetail::Image {
+                width,
+                height,
+                camera,
+            } => {
                 let mut v = vec![format_size(r.size_bytes, DECIMAL)];
-                if let (Some(w), Some(h)) = (width, height) { v.push(format!("{w}×{h}px")); }
-                if let Some(c) = camera { v.push(c.clone()); }
+                if let (Some(w), Some(h)) = (width, height) {
+                    v.push(format!("{w}×{h}px"));
+                }
+                if let Some(c) = camera {
+                    v.push(c.clone());
+                }
                 v
             }
             SearchDetail::Print3D { triangles } => {
-                let mut v = vec![format_size(r.size_bytes, DECIMAL), r.extension.to_uppercase()];
-                if let Some(t) = triangles { v.push(format!("{t} triangles")); }
+                let mut v = vec![
+                    format_size(r.size_bytes, DECIMAL),
+                    r.extension.to_uppercase(),
+                ];
+                if let Some(t) = triangles {
+                    v.push(format!("{t} triangles"));
+                }
                 v
             }
             SearchDetail::Other => {
-                vec![format_size(r.size_bytes, DECIMAL), r.extension.to_uppercase()]
+                vec![
+                    format_size(r.size_bytes, DECIMAL),
+                    r.extension.to_uppercase(),
+                ]
             }
         };
 
@@ -894,13 +1134,23 @@ fn cmd_export(db: Database, output: &std::path::Path) -> Result<()> {
 }
 
 fn cmd_doctor() -> Result<()> {
-    println!("{}\n", "─── Dependency check ─────────────────────────".bold().cyan());
+    println!(
+        "{}\n",
+        "─── Dependency check ─────────────────────────"
+            .bold()
+            .cyan()
+    );
 
     let check = |name: &str, available: bool, install: &str| {
         if available {
             println!("  {} {}", "✓".green(), name.bold());
         } else {
-            println!("  {} {} — install: {}", "✗".red(), name.bold(), install.dimmed());
+            println!(
+                "  {} {} — install: {}",
+                "✗".red(),
+                name.bold(),
+                install.dimmed()
+            );
         }
     };
 
@@ -912,7 +1162,10 @@ fn cmd_doctor() -> Result<()> {
 
     check(
         "unrar (.rar files)",
-        std::process::Command::new("unrar").arg("--help").output().is_ok(),
+        std::process::Command::new("unrar")
+            .arg("--help")
+            .output()
+            .is_ok(),
         "sudo apt install unrar  /  brew install rar",
     );
 
@@ -931,7 +1184,8 @@ fn cmd_doctor() -> Result<()> {
         };
         match result {
             Ok(out) => {
-                println!("    {} stl-thumb {} → exit={} stdout={:?}",
+                println!(
+                    "    {} stl-thumb {} → exit={} stdout={:?}",
                     "·".dimmed(),
                     if flag.is_empty() { "(no args)" } else { flag },
                     out.status.code().unwrap_or(-1),
@@ -940,60 +1194,77 @@ fn cmd_doctor() -> Result<()> {
                 break; // if it works, this is enough
             }
             Err(e) => {
-                println!("    {} stl-thumb {} → error: {e}",
+                println!(
+                    "    {} stl-thumb {} → error: {e}",
                     "·".dimmed(),
-                    if flag.is_empty() { "(no args)" } else { flag });
+                    if flag.is_empty() { "(no args)" } else { flag }
+                );
             }
         }
     }
 
-    println!("\n  {} ZIP, 7Z, audio, image: pure Rust — no dependencies", "✓".green());
+    println!(
+        "\n  {} ZIP, 7Z, audio, image: pure Rust — no dependencies",
+        "✓".green()
+    );
     Ok(())
 }
 
 fn cmd_thumbs(
-    db:      Database,
+    db: Database,
     db_path: &str,
-    tipo:    Option<MediaTypeArg>,
-    size:    u32,
+    tipo: Option<MediaTypeArg>,
+    size: u32,
     quality: u8,
-    force:   bool,
+    force: bool,
     verbose: bool,
 ) -> Result<()> {
-    use thumbs::{thumb_dir_for_db, thumb_path, generate_image, generate_image_from_bytes,
-                 generate_video, generate_video_from_archive, generate_3d};
+    use thumbs::{
+        generate_3d, generate_image, generate_image_from_bytes, generate_video,
+        generate_video_from_archive, thumb_dir_for_db, thumb_path,
+    };
 
-    let thumb_dir   = thumb_dir_for_db(db_path);
+    let thumb_dir = thumb_dir_for_db(db_path);
     let type_filter = tipo.as_ref().map(|t| t.as_db_str());
-    let files       = db.files_for_thumbs(type_filter)?;
+    let files = db.files_for_thumbs(type_filter)?;
 
     if files.is_empty() {
         println!("{}", "No candidate files for thumbnails.".dimmed());
         return Ok(());
     }
 
-    println!("{} Generating thumbnails in {}",
-        "🖼", thumb_dir.display().to_string().bold());
-    println!("  {} files  {}px  quality {}\n",
-        files.len().to_string().cyan(), size, quality);
+    println!(
+        "{} Generating thumbnails in {}",
+        "🖼",
+        thumb_dir.display().to_string().bold()
+    );
+    println!(
+        "  {} files  {}px  quality {}\n",
+        files.len().to_string().cyan(),
+        size,
+        quality
+    );
 
     let pb = ProgressBar::new(files.len() as u64);
-    pb.set_style(ProgressStyle::with_template(
-        "{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}"
-    )?.progress_chars("█▓░"));
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
+        )?
+        .progress_chars("█▓░"),
+    );
 
     let (mut ok, mut skipped, mut errors) = (0usize, 0usize, 0usize);
 
     for (hash, path, media_type, ext) in &files {
         let media_type: &str = media_type.as_str();
-        let hash:       &str = hash.as_str();
-        let path:       &str = path.as_str();
-        let ext:        &str = ext.as_str();
+        let hash: &str = hash.as_str();
+        let path: &str = path.as_str();
+        let ext: &str = ext.as_str();
         pb.set_message(
             std::path::Path::new(path)
                 .file_name()
                 .map(|n| n.to_string_lossy().chars().take(45).collect::<String>())
-                .unwrap_or_default()
+                .unwrap_or_default(),
         );
 
         // Skip if already exists and --force was not requested
@@ -1008,7 +1279,7 @@ fn cmd_thumbs(
             // ── File inside archive ───────────────────────────────────────
             let mut parts = path.splitn(2, "::");
             let archive_path = parts.next().unwrap_or("");
-            let inner_name   = parts.next().unwrap_or("");
+            let inner_name = parts.next().unwrap_or("");
 
             // Extract the file's bytes from the archive
             let bytes_result = extract_entry_bytes(archive_path, inner_name);
@@ -1017,36 +1288,48 @@ fn cmd_thumbs(
                 Err(e) => Err(e),
                 Ok(data) => match media_type {
                     "image" => generate_image_from_bytes(&data, hash, &thumb_dir, size, quality),
-                    "video" => generate_video_from_archive(&data, ext, hash, &thumb_dir, size, quality),
-                    "3d"    => generate_3d(&data, ext, hash, &thumb_dir, size, quality),
-                    _       => { pb.inc(1); continue; }
-                }
+                    "video" => {
+                        generate_video_from_archive(&data, ext, hash, &thumb_dir, size, quality)
+                    }
+                    "3d" => generate_3d(&data, ext, hash, &thumb_dir, size, quality),
+                    _ => {
+                        pb.inc(1);
+                        continue;
+                    }
+                },
             }
         } else {
             // ── Loose file on disk ────────────────────────────────────────
             match media_type {
                 "image" => generate_image(path, hash, &thumb_dir, size, quality),
                 "video" => generate_video(path, hash, &thumb_dir, size, quality),
-                "3d"    => {
-                    match std::fs::read(path) {
-                        Ok(data) => generate_3d(&data, ext, hash, &thumb_dir, size, quality),
-                        Err(e)   => Err(anyhow::anyhow!(e)),
-                    }
+                "3d" => match std::fs::read(path) {
+                    Ok(data) => generate_3d(&data, ext, hash, &thumb_dir, size, quality),
+                    Err(e) => Err(anyhow::anyhow!(e)),
+                },
+                _ => {
+                    pb.inc(1);
+                    continue;
                 }
-                _ => { pb.inc(1); continue; }
             }
         };
 
         match result {
-            Ok(_)  => ok += 1,
+            Ok(_) => ok += 1,
             Err(e) => {
                 errors += 1;
-                pb.println(format!("  {} {}: {}",
+                pb.println(format!(
+                    "  {} {}: {}",
                     "✗".red(),
-                    std::path::Path::new(path).file_name()
+                    std::path::Path::new(path)
+                        .file_name()
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_default(),
-                    if verbose { e.to_string() } else { e.to_string().chars().take(80).collect() }
+                    if verbose {
+                        e.to_string()
+                    } else {
+                        e.to_string().chars().take(80).collect()
+                    }
                 ));
             }
         }
@@ -1056,11 +1339,17 @@ fn cmd_thumbs(
 
     pb.finish_with_message("done");
 
-    println!("\n{}", "─── Result ───────────────────────────────────".dimmed());
+    println!(
+        "\n{}",
+        "─── Result ───────────────────────────────────".dimmed()
+    );
     println!("  {} generated", ok.to_string().green().bold());
     if skipped > 0 {
-        println!("  {} skipped (already existed — use {} to regenerate)",
-            skipped.to_string().dimmed(), "--force".bold());
+        println!(
+            "  {} skipped (already existed — use {} to regenerate)",
+            skipped.to_string().dimmed(),
+            "--force".bold()
+        );
     }
     if errors > 0 {
         println!("  {} errors", errors.to_string().red());
@@ -1082,14 +1371,15 @@ fn extract_entry_bytes(archive_path: &str, inner_name: &str) -> anyhow::Result<V
 
     match arc_type {
         ArchiveType::Zip => {
-            let file    = std::fs::File::open(arc_path)?;
+            let file = std::fs::File::open(arc_path)?;
             let mut zip = zip::ZipArchive::new(file)?;
 
             // First look for exact name; otherwise search by base filename
             let idx = if zip.by_name(inner_name).is_ok() {
                 // by_name with is_ok does not keep the borrow — find the real index
                 (0..zip.len()).find(|&i| {
-                    zip.by_index(i).ok()
+                    zip.by_index(i)
+                        .ok()
                         .map(|e| e.name() == inner_name)
                         .unwrap_or(false)
                 })
@@ -1099,21 +1389,23 @@ fn extract_entry_bytes(archive_path: &str, inner_name: &str) -> anyhow::Result<V
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
                 (0..zip.len()).find(|&i| {
-                    zip.by_index(i).ok()
+                    zip.by_index(i)
+                        .ok()
                         .map(|e| e.name().ends_with(&*base))
                         .unwrap_or(false)
                 })
-            }.ok_or_else(|| anyhow::anyhow!("{inner_name} not found in {archive_path}"))?;
+            }
+            .ok_or_else(|| anyhow::anyhow!("{inner_name} not found in {archive_path}"))?;
 
             let mut entry = zip.by_index(idx)?;
-            let mut data  = Vec::with_capacity(entry.size() as usize);
+            let mut data = Vec::with_capacity(entry.size() as usize);
             std::io::copy(&mut entry, &mut data)?;
             Ok(data)
         }
         ArchiveType::SevenZip => {
             use sevenz_rust::SevenZReader;
             let mut archive = SevenZReader::open(arc_path, sevenz_rust::Password::empty())?;
-            let mut found   = None;
+            let mut found = None;
             archive.for_each_entries(|entry, reader| {
                 if entry.name() == inner_name
                     || entry.name().ends_with(&format!("/{inner_name}"))
@@ -1137,13 +1429,14 @@ fn extract_entry_bytes(archive_path: &str, inner_name: &str) -> anyhow::Result<V
                 archive_path.hash(&mut h);
                 h.finish()
             };
-            let tmp = std::env::temp_dir()
-                .join(format!("media_idx_rar_{}_{:016x}",
-                    std::path::Path::new(archive_path)
-                        .file_stem().map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "tmp".into()),
-                    path_hash,
-                ));
+            let tmp = std::env::temp_dir().join(format!(
+                "media_idx_rar_{}_{:016x}",
+                std::path::Path::new(archive_path)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "tmp".into()),
+                path_hash,
+            ));
             std::fs::create_dir_all(&tmp)?;
             Command::new("unrar")
                 .args(["x", "-y", "-inul", archive_path])
@@ -1153,17 +1446,20 @@ fn extract_entry_bytes(archive_path: &str, inner_name: &str) -> anyhow::Result<V
             let target = walkdir::WalkDir::new(&tmp)
                 .into_iter()
                 .flatten()
-                .find(|e| e.file_type().is_file() && {
-                    let name = e.file_name().to_string_lossy();
-                    let inner_base = Path::new(inner_name)
-                        .file_name().map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    name == inner_base.as_str()
+                .find(|e| {
+                    e.file_type().is_file() && {
+                        let name = e.file_name().to_string_lossy();
+                        let inner_base = Path::new(inner_name)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
+                        name == inner_base.as_str()
+                    }
                 })
                 .map(|e| e.path().to_path_buf());
             let result = match &target {
                 Some(p) => std::fs::read(p).map_err(|e| anyhow::anyhow!(e)),
-                None    => Err(anyhow::anyhow!("{inner_name} not found in {archive_path}")),
+                None => Err(anyhow::anyhow!("{inner_name} not found in {archive_path}")),
             };
             let _ = std::fs::remove_dir_all(&tmp);
             result
@@ -1174,8 +1470,10 @@ fn extract_entry_bytes(archive_path: &str, inner_name: &str) -> anyhow::Result<V
 fn cmd_clean(db: Database, macos_junk: bool) -> Result<()> {
     if !macos_junk {
         println!("{}", "Specify what to clean. Available options:".yellow());
-        println!("  {} Remove macOS junk entries (__MACOSX/, ._, .DS_Store)",
-            "--macos-junk".bold());
+        println!(
+            "  {} Remove macOS junk entries (__MACOSX/, ._, .DS_Store)",
+            "--macos-junk".bold()
+        );
         return Ok(());
     }
 
@@ -1183,17 +1481,22 @@ fn cmd_clean(db: Database, macos_junk: bool) -> Result<()> {
     if removed == 0 {
         println!("{}", "No macOS junk entries found in the DB 🎉".green());
     } else {
-        println!("  {} {} macOS junk entry/ies removed from the DB",
+        println!(
+            "  {} {} macOS junk entry/ies removed from the DB",
             "✓".green(),
-            removed.to_string().green().bold());
-        println!("  {} Files on disk were {} touched.",
-            " ".normal(), "not".bold());
+            removed.to_string().green().bold()
+        );
+        println!(
+            "  {} Files on disk were {} touched.",
+            " ".normal(),
+            "not".bold()
+        );
     }
     Ok(())
 }
 
 fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
-    use humansize::{format_size, DECIMAL};
+    use humansize::{DECIMAL, format_size};
 
     let files = db.files_for_verify()?;
 
@@ -1202,22 +1505,30 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
         return Ok(());
     }
 
-    println!("{} Verifying {} file(s){}\n",
+    println!(
+        "{} Verifying {} file(s){}\n",
         "🔍".cyan(),
         files.len().to_string().bold(),
-        if prune { " (--prune active: invalid entries will be removed)" } else { "" },
+        if prune {
+            " (--prune active: invalid entries will be removed)"
+        } else {
+            ""
+        },
     );
 
     let pb = indicatif::ProgressBar::new(files.len() as u64);
-    pb.set_style(indicatif::ProgressStyle::with_template(
-        "{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}"
-    )?.progress_chars("█▓░"));
+    pb.set_style(
+        indicatif::ProgressStyle::with_template(
+            "{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
+        )?
+        .progress_chars("█▓░"),
+    );
 
     let (mut ok, mut missing, mut modified, mut pruned) = (0usize, 0usize, 0usize, 0usize);
 
     // Partial hash threshold — must match scanner.rs
     const PARTIAL_HASH_THRESHOLD: u64 = 100 * 1024 * 1024;
-    const PARTIAL_CHUNK_SIZE:     u64 = 4   * 1024 * 1024;
+    const PARTIAL_CHUNK_SIZE: u64 = 4 * 1024 * 1024;
 
     for (id, stored_hash, path, stored_size) in &files {
         let p = std::path::Path::new(path);
@@ -1225,16 +1536,20 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
         pb.set_message(
             p.file_name()
                 .map(|n| n.to_string_lossy().chars().take(45).collect::<String>())
-                .unwrap_or_default()
+                .unwrap_or_default(),
         );
 
         // ── 1. Exists on disk? ────────────────────────────────────────────
         let meta = match p.metadata() {
-            Ok(m)  => m,
+            Ok(m) => m,
             Err(_) => {
                 missing += 1;
-                pb.println(format!("  {} {} {}",
-                    "✗".red(), "MISSING:".red().bold(), path.dimmed()));
+                pb.println(format!(
+                    "  {} {} {}",
+                    "✗".red(),
+                    "MISSING:".red().bold(),
+                    path.dimmed()
+                ));
                 if prune {
                     let _ = db.remove_file(*id);
                     pruned += 1;
@@ -1249,12 +1564,14 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
         // ── 2. Size changed? (fast, no re-hashing) ───────────────────────
         if current_size != *stored_size {
             modified += 1;
-            pb.println(format!("  {} {} {} (was {}, now {})",
+            pb.println(format!(
+                "  {} {} {} (was {}, now {})",
                 "!".yellow().bold(),
                 "MODIFIED:".yellow().bold(),
                 path.dimmed(),
                 format_size(*stored_size, DECIMAL).dimmed(),
-                format_size(current_size, DECIMAL).yellow()));
+                format_size(current_size, DECIMAL).yellow()
+            ));
             if prune {
                 let _ = db.remove_file(*id);
                 pruned += 1;
@@ -1268,8 +1585,12 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
             match std::fs::read(p) {
                 Ok(data) => blake3::hash(&data).to_hex().to_string(),
                 Err(e) => {
-                    pb.println(format!("  {} {} {}: {e}",
-                        "✗".red(), "ERROR:".red().bold(), path.dimmed()));
+                    pb.println(format!(
+                        "  {} {} {}: {e}",
+                        "✗".red(),
+                        "ERROR:".red().bold(),
+                        path.dimmed()
+                    ));
                     missing += 1;
                     pb.inc(1);
                     continue;
@@ -1282,8 +1603,12 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
             let mut hasher = blake3::Hasher::new();
             match std::fs::File::open(p) {
                 Err(e) => {
-                    pb.println(format!("  {} {} {}: {e}",
-                        "✗".red(), "ERROR:".red().bold(), path.dimmed()));
+                    pb.println(format!(
+                        "  {} {} {}: {e}",
+                        "✗".red(),
+                        "ERROR:".red().bold(),
+                        path.dimmed()
+                    ));
                     missing += 1;
                     pb.inc(1);
                     continue;
@@ -1307,10 +1632,12 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
 
         if &current_hash != stored_hash {
             modified += 1;
-            pb.println(format!("  {} {} {}",
+            pb.println(format!(
+                "  {} {} {}",
                 "!".yellow().bold(),
                 "HASH CHANGED:".yellow().bold(),
-                path.dimmed()));
+                path.dimmed()
+            ));
             if prune {
                 let _ = db.remove_file(*id);
                 pruned += 1;
@@ -1327,19 +1654,31 @@ fn cmd_verify(db: Database, prune: bool, quiet: bool) -> Result<()> {
 
     pb.finish_with_message("done");
 
-    println!("\n{}", "─── Result ───────────────────────────────────".dimmed());
-    println!("  {} OK",            ok.to_string().green().bold());
+    println!(
+        "\n{}",
+        "─── Result ───────────────────────────────────".dimmed()
+    );
+    println!("  {} OK", ok.to_string().green().bold());
     if missing > 0 {
-        println!("  {} missing",  missing.to_string().red().bold());
+        println!("  {} missing", missing.to_string().red().bold());
     }
     if modified > 0 {
-        println!("  {} modified / hash changed", modified.to_string().yellow().bold());
+        println!(
+            "  {} modified / hash changed",
+            modified.to_string().yellow().bold()
+        );
     }
     if prune && pruned > 0 {
-        println!("  {} entry/ies removed from the DB", pruned.to_string().cyan().bold());
+        println!(
+            "  {} entry/ies removed from the DB",
+            pruned.to_string().cyan().bold()
+        );
     } else if (missing > 0 || modified > 0) && !prune {
-        println!("  {} Use {} to remove these entries from the DB.",
-            "→".dimmed(), "--prune".bold());
+        println!(
+            "  {} Use {} to remove these entries from the DB.",
+            "→".dimmed(),
+            "--prune".bold()
+        );
     }
 
     Ok(())
@@ -1356,19 +1695,25 @@ fn cmd_similar(db: Database, kind: SimilarKind, threshold: u32, as_json: bool) -
                 return Ok(());
             }
             if as_json {
-                let json: Vec<_> = groups.iter().map(|g| {
-                    serde_json::json!({
-                        "files": g.files.iter().map(|f| serde_json::json!({
-                            "path": f.path, "name": f.name,
-                            "width": f.width, "height": f.height, "phash": f.phash,
-                        })).collect::<Vec<_>>()
+                let json: Vec<_> = groups
+                    .iter()
+                    .map(|g| {
+                        serde_json::json!({
+                            "files": g.files.iter().map(|f| serde_json::json!({
+                                "path": f.path, "name": f.name,
+                                "width": f.width, "height": f.height, "phash": f.phash,
+                            })).collect::<Vec<_>>()
+                        })
                     })
-                }).collect();
+                    .collect();
                 println!("{}", serde_json::to_string_pretty(&json)?);
                 return Ok(());
             }
-            println!("{} grupos de imágenes similares (umbral Hamming ≤{})\n",
-                groups.len().to_string().yellow().bold(), threshold);
+            println!(
+                "{} grupos de imágenes similares (umbral Hamming ≤{})\n",
+                groups.len().to_string().yellow().bold(),
+                threshold
+            );
             for g in &groups {
                 println!("{}", "──────────────────────────────────────".dimmed());
                 for f in &g.files {
@@ -1389,32 +1734,49 @@ fn cmd_similar(db: Database, kind: SimilarKind, threshold: u32, as_json: bool) -
                 return Ok(());
             }
             if as_json {
-                let json: Vec<_> = groups.iter().map(|g| {
-                    serde_json::json!({
-                        "title": g.title, "artist": g.artist,
-                        "files": g.files.iter().map(|f| serde_json::json!({
-                            "path": f.path, "name": f.name,
-                            "duration_secs": f.duration_secs, "album": f.album,
-                        })).collect::<Vec<_>>()
+                let json: Vec<_> = groups
+                    .iter()
+                    .map(|g| {
+                        serde_json::json!({
+                            "title": g.title, "artist": g.artist,
+                            "files": g.files.iter().map(|f| serde_json::json!({
+                                "path": f.path, "name": f.name,
+                                "duration_secs": f.duration_secs, "album": f.album,
+                            })).collect::<Vec<_>>()
+                        })
                     })
-                }).collect();
+                    .collect();
                 println!("{}", serde_json::to_string_pretty(&json)?);
                 return Ok(());
             }
-            println!("{} grupos de audio similar\n",
-                groups.len().to_string().yellow().bold());
+            println!(
+                "{} grupos de audio similar\n",
+                groups.len().to_string().yellow().bold()
+            );
             for g in &groups {
-                println!("{} \"{}\" — {}",
-                    "♪".magenta(), g.title.bold(), g.artist.cyan());
+                println!(
+                    "{} \"{}\" — {}",
+                    "♪".magenta(),
+                    g.title.bold(),
+                    g.artist.cyan()
+                );
                 for f in &g.files {
-                    let dur = f.duration_secs
+                    let dur = f
+                        .duration_secs
                         .map(|d| format!(" ({})", fmt_duration(d)))
                         .unwrap_or_default();
-                    let album = f.album.as_deref()
+                    let album = f
+                        .album
+                        .as_deref()
                         .map(|a| format!(" [{a}]"))
                         .unwrap_or_default();
-                    println!("  {} {}{}{}", "↳".dimmed(), f.name.bold(),
-                        dur.dimmed(), album.dimmed());
+                    println!(
+                        "  {} {}{}{}",
+                        "↳".dimmed(),
+                        f.name.bold(),
+                        dur.dimmed(),
+                        album.dimmed()
+                    );
                     println!("    {}", f.path.dimmed());
                 }
                 println!();
@@ -1427,11 +1789,11 @@ fn cmd_similar(db: Database, kind: SimilarKind, threshold: u32, as_json: bool) -
 // ── Empty files and directories ───────────────────────────────────────────
 
 fn cmd_empty(
-    root:       &std::path::Path,
-    dirs_only:  bool,
+    root: &std::path::Path,
+    dirs_only: bool,
     files_only: bool,
-    delete:     bool,
-    dry_run:    bool,
+    delete: bool,
+    dry_run: bool,
 ) -> Result<()> {
     use walkdir::WalkDir;
 
@@ -1440,13 +1802,16 @@ fn cmd_empty(
     }
 
     if dry_run {
-        println!("{}", "  [DRY-RUN] No files will be modified.\n".yellow().bold());
+        println!(
+            "{}",
+            "  [DRY-RUN] No files will be modified.\n".yellow().bold()
+        );
     }
 
     let mut found_files = 0usize;
-    let mut found_dirs  = 0usize;
-    let mut deleted     = 0usize;
-    let mut errors      = 0usize;
+    let mut found_dirs = 0usize;
+    let mut deleted = 0usize;
+    let mut errors = 0usize;
 
     // Collect dirs bottom-up so we can detect newly-empty parents
     let entries: Vec<_> = WalkDir::new(root)
@@ -1458,26 +1823,42 @@ fn cmd_empty(
 
     for entry in &entries {
         let path = entry.path();
-        if path == root { continue; }
+        if path == root {
+            continue;
+        }
 
-        let is_dir  = entry.file_type().is_dir();
+        let is_dir = entry.file_type().is_dir();
         let is_file = entry.file_type().is_file();
 
         let is_empty = if is_file {
             entry.metadata().map(|m| m.len() == 0).unwrap_or(false)
         } else if is_dir {
-            std::fs::read_dir(path).map(|mut d| d.next().is_none()).unwrap_or(false)
+            std::fs::read_dir(path)
+                .map(|mut d| d.next().is_none())
+                .unwrap_or(false)
         } else {
             false
         };
 
-        if !is_empty { continue; }
+        if !is_empty {
+            continue;
+        }
 
-        if (is_file && dirs_only) || (is_dir && files_only) { continue; }
+        if (is_file && dirs_only) || (is_dir && files_only) {
+            continue;
+        }
 
-        if is_file { found_files += 1; } else { found_dirs += 1; }
+        if is_file {
+            found_files += 1;
+        } else {
+            found_dirs += 1;
+        }
 
-        let label = if is_dir { "DIR ".cyan() } else { "FILE".yellow() };
+        let label = if is_dir {
+            "DIR ".cyan()
+        } else {
+            "FILE".yellow()
+        };
         if dry_run || !delete {
             println!("  {} {}", label, path.display().to_string().dimmed());
         } else {
@@ -1489,7 +1870,12 @@ fn cmd_empty(
             match result {
                 Ok(_) => {
                     deleted += 1;
-                    println!("  {} {} {}", "✓".green(), label, path.display().to_string().dimmed());
+                    println!(
+                        "  {} {} {}",
+                        "✓".green(),
+                        label,
+                        path.display().to_string().dimmed()
+                    );
                 }
                 Err(e) => {
                     errors += 1;
@@ -1499,14 +1885,29 @@ fn cmd_empty(
         }
     }
 
-    println!("\n{}", "─── Resultado ─────────────────────────────────".dimmed());
-    println!("  {} archivo(s) vacío(s)", found_files.to_string().yellow().bold());
-    println!("  {} carpeta(s) vacía(s)", found_dirs.to_string().cyan().bold());
+    println!(
+        "\n{}",
+        "─── Resultado ─────────────────────────────────".dimmed()
+    );
+    println!(
+        "  {} archivo(s) vacío(s)",
+        found_files.to_string().yellow().bold()
+    );
+    println!(
+        "  {} carpeta(s) vacía(s)",
+        found_dirs.to_string().cyan().bold()
+    );
     if delete && !dry_run {
         println!("  {} eliminado(s)", deleted.to_string().green().bold());
-        if errors > 0 { println!("  {} error(es)", errors.to_string().red()); }
+        if errors > 0 {
+            println!("  {} error(es)", errors.to_string().red());
+        }
     } else if dry_run && (found_files + found_dirs) > 0 {
-        println!("  {} Ejecuta sin {} para eliminar.", "→".dimmed(), "--dry-run".bold());
+        println!(
+            "  {} Ejecuta sin {} para eliminar.",
+            "→".dimmed(),
+            "--dry-run".bold()
+        );
     }
 
     Ok(())
@@ -1514,11 +1915,7 @@ fn cmd_empty(
 
 // ── Feature #5: symlinks rotos ───────────────────────────────────────────
 
-fn cmd_broken(
-    root:    &std::path::Path,
-    delete:  bool,
-    dry_run: bool,
-) -> Result<()> {
+fn cmd_broken(root: &std::path::Path, delete: bool, dry_run: bool) -> Result<()> {
     use walkdir::WalkDir;
 
     if !root.exists() {
@@ -1526,40 +1923,55 @@ fn cmd_broken(
     }
 
     if dry_run {
-        println!("{}", "  [DRY-RUN] No files will be modified.\n".yellow().bold());
+        println!(
+            "{}",
+            "  [DRY-RUN] No files will be modified.\n".yellow().bold()
+        );
     }
 
-    let mut found   = 0usize;
+    let mut found = 0usize;
     let mut deleted = 0usize;
-    let mut errors  = 0usize;
+    let mut errors = 0usize;
 
-    for entry in WalkDir::new(root).follow_links(false).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         let path = entry.path();
-        if !entry.path_is_symlink() { continue; }
+        if !entry.path_is_symlink() {
+            continue;
+        }
 
         // A symlink is broken if its target does not exist
         let target = std::fs::read_link(path).unwrap_or_default();
-        let broken  = !path.exists(); // exists() follows the link; false = broken
+        let broken = !path.exists(); // exists() follows the link; false = broken
 
-        if !broken { continue; }
+        if !broken {
+            continue;
+        }
 
         found += 1;
         let target_str = target.display().to_string();
 
         if dry_run || !delete {
-            println!("  {} {} {} {}",
+            println!(
+                "  {} {} {} {}",
                 "⚠".yellow(),
                 path.display().to_string().bold(),
                 "→".dimmed(),
-                target_str.red());
+                target_str.red()
+            );
         } else {
             match std::fs::remove_file(path) {
                 Ok(_) => {
                     deleted += 1;
-                    println!("  {} {} (target: {})",
+                    println!(
+                        "  {} {} (target: {})",
                         "✓".green(),
                         path.display().to_string().dimmed(),
-                        target_str.red().dimmed());
+                        target_str.red().dimmed()
+                    );
                 }
                 Err(e) => {
                     errors += 1;
@@ -1569,16 +1981,28 @@ fn cmd_broken(
         }
     }
 
-    println!("\n{}", "─── Resultado ─────────────────────────────────".dimmed());
+    println!(
+        "\n{}",
+        "─── Resultado ─────────────────────────────────".dimmed()
+    );
     if found == 0 {
         println!("  {}", "No broken symlinks found 🎉".green());
     } else {
-        println!("  {} symlink(s) roto(s) encontrado(s)", found.to_string().yellow().bold());
+        println!(
+            "  {} symlink(s) roto(s) encontrado(s)",
+            found.to_string().yellow().bold()
+        );
         if delete && !dry_run {
             println!("  {} eliminado(s)", deleted.to_string().green().bold());
-            if errors > 0 { println!("  {} error(es)", errors.to_string().red()); }
+            if errors > 0 {
+                println!("  {} error(es)", errors.to_string().red());
+            }
         } else if dry_run {
-            println!("  {} Ejecuta sin {} para eliminar.", "→".dimmed(), "--dry-run".bold());
+            println!(
+                "  {} Ejecuta sin {} para eliminar.",
+                "→".dimmed(),
+                "--dry-run".bold()
+            );
         }
     }
 
@@ -1623,5 +2047,9 @@ fn fmt_duration(secs: f64) -> String {
     let h = total / 3600;
     let m = (total % 3600) / 60;
     let s = total % 60;
-    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
 }

@@ -1,14 +1,14 @@
-use std::sync::mpsc;
 use eframe::egui;
+use std::sync::mpsc;
 
-use crate::models::{SimilarImageGroup, SimilarAudioGroup};
 use super::TaskResult;
+use crate::models::{SimilarAudioGroup, SimilarImageGroup};
 
 pub struct SimilarState {
     pub image_groups: Vec<SimilarImageGroup>,
     pub audio_groups: Vec<SimilarAudioGroup>,
-    tab:              SimilarTab,
-    threshold:        u32,
+    tab: SimilarTab,
+    threshold: u32,
 }
 
 impl Default for SimilarState {
@@ -16,22 +16,25 @@ impl Default for SimilarState {
         Self {
             image_groups: vec![],
             audio_groups: vec![],
-            tab:          SimilarTab::Images,
-            threshold:    10,
+            tab: SimilarTab::Images,
+            threshold: 10,
         }
     }
 }
 
-
 #[derive(Default, PartialEq, Clone, Copy)]
-enum SimilarTab { #[default] Images, Audio }
+enum SimilarTab {
+    #[default]
+    Images,
+    Audio,
+}
 
 pub fn show(
-    ui:      &mut egui::Ui,
-    state:   &mut SimilarState,
-    ctx:     &egui::Context,
+    ui: &mut egui::Ui,
+    state: &mut SimilarState,
+    ctx: &egui::Context,
     db_path: &str,
-    tx:      &mpsc::Sender<TaskResult>,
+    tx: &mpsc::Sender<TaskResult>,
 ) {
     ui.horizontal(|ui| {
         ui.heading("🔮 Archivos similares");
@@ -40,10 +43,16 @@ pub fn show(
 
     // ── Tab selector ──────────────────────────────────────────────────────
     ui.horizontal(|ui| {
-        if ui.selectable_label(state.tab == SimilarTab::Images, "🖼 Imágenes similares").clicked() {
+        if ui
+            .selectable_label(state.tab == SimilarTab::Images, "🖼 Imágenes similares")
+            .clicked()
+        {
             state.tab = SimilarTab::Images;
         }
-        if ui.selectable_label(state.tab == SimilarTab::Audio, "♪ Audio duplicado").clicked() {
+        if ui
+            .selectable_label(state.tab == SimilarTab::Audio, "♪ Audio duplicado")
+            .clicked()
+        {
             state.tab = SimilarTab::Audio;
         }
     });
@@ -51,16 +60,16 @@ pub fn show(
 
     match state.tab {
         SimilarTab::Images => show_images(ui, state, ctx, db_path, tx),
-        SimilarTab::Audio  => show_audio(ui, state, ctx, db_path, tx),
+        SimilarTab::Audio => show_audio(ui, state, ctx, db_path, tx),
     }
 }
 
 fn show_images(
-    ui:      &mut egui::Ui,
-    state:   &mut SimilarState,
-    ctx:     &egui::Context,
+    ui: &mut egui::Ui,
+    state: &mut SimilarState,
+    ctx: &egui::Context,
     db_path: &str,
-    tx:      &mpsc::Sender<TaskResult>,
+    tx: &mpsc::Sender<TaskResult>,
 ) {
     ui.horizontal(|ui| {
         ui.label("Umbral de similitud (0 = idéntico, 64 = máximo):");
@@ -79,14 +88,19 @@ fn show_images(
         return;
     }
 
-    ui.label(format!("{} grupos de imágenes similares", state.image_groups.len()));
+    ui.label(format!(
+        "{} grupos de imágenes similares",
+        state.image_groups.len()
+    ));
     ui.separator();
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         for (i, group) in state.image_groups.iter().enumerate() {
-            egui::CollapsingHeader::new(
-                format!("Grupo {} — {} imágenes", i + 1, group.files.len())
-            )
+            egui::CollapsingHeader::new(format!(
+                "Grupo {} — {} imágenes",
+                i + 1,
+                group.files.len()
+            ))
             .id_salt(format!("img_group_{i}"))
             .default_open(i == 0)
             .show(ui, |ui| {
@@ -108,9 +122,12 @@ fn show_images(
                             };
                             ui.label(dims);
                             ui.label(
-                                egui::RichText::new(format!("{}…", &entry.phash[..8.min(entry.phash.len())]))
-                                    .monospace()
-                                    .weak()
+                                egui::RichText::new(format!(
+                                    "{}…",
+                                    &entry.phash[..8.min(entry.phash.len())]
+                                ))
+                                .monospace()
+                                .weak(),
                             );
                             ui.label(egui::RichText::new(&entry.path).weak().size(11.0));
                             ui.end_row();
@@ -119,7 +136,9 @@ fn show_images(
 
                 ui.horizontal(|ui| {
                     if ui.small_button("📋 Copiar rutas").clicked() {
-                        let paths = group.files.iter()
+                        let paths = group
+                            .files
+                            .iter()
                             .map(|f| f.path.as_str())
                             .collect::<Vec<_>>()
                             .join("\n");
@@ -133,11 +152,11 @@ fn show_images(
 }
 
 fn show_audio(
-    ui:      &mut egui::Ui,
-    state:   &mut SimilarState,
-    ctx:     &egui::Context,
+    ui: &mut egui::Ui,
+    state: &mut SimilarState,
+    ctx: &egui::Context,
     db_path: &str,
-    tx:      &mpsc::Sender<TaskResult>,
+    tx: &mpsc::Sender<TaskResult>,
 ) {
     ui.horizontal(|ui| {
         ui.label("Detecta canciones con el mismo título + artista en múltiples archivos.");
@@ -155,17 +174,22 @@ fn show_audio(
         return;
     }
 
-    ui.label(format!("{} grupos de canciones duplicadas", state.audio_groups.len()));
+    ui.label(format!(
+        "{} grupos de canciones duplicadas",
+        state.audio_groups.len()
+    ));
     ui.separator();
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         for (i, group) in state.audio_groups.iter().enumerate() {
             let header = format!(
                 "♪ {} — {} · {} copias",
-                group.title, group.artist, group.files.len()
+                group.title,
+                group.artist,
+                group.files.len()
             );
             egui::CollapsingHeader::new(
-                egui::RichText::new(&header).color(egui::Color32::from_rgb(200, 90, 255))
+                egui::RichText::new(&header).color(egui::Color32::from_rgb(200, 90, 255)),
             )
             .id_salt(format!("aud_group_{i}"))
             .default_open(i == 0)
@@ -189,7 +213,9 @@ fn show_audio(
 
                 ui.horizontal(|ui| {
                     if ui.small_button("📋 Copiar rutas").clicked() {
-                        let paths = group.files.iter()
+                        let paths = group
+                            .files
+                            .iter()
                             .map(|f| f.path.as_str())
                             .collect::<Vec<_>>()
                             .join("\n");
@@ -203,10 +229,10 @@ fn show_audio(
 }
 
 fn load_similar_images(
-    ctx:       egui::Context,
-    db_path:   &str,
+    ctx: egui::Context,
+    db_path: &str,
     threshold: u32,
-    tx:        &mpsc::Sender<TaskResult>,
+    tx: &mpsc::Sender<TaskResult>,
 ) {
     let db_path = db_path.to_string();
     let tx = tx.clone();
@@ -220,11 +246,7 @@ fn load_similar_images(
     });
 }
 
-fn load_similar_audio(
-    ctx:     egui::Context,
-    db_path: &str,
-    tx:      &mpsc::Sender<TaskResult>,
-) {
+fn load_similar_audio(ctx: egui::Context, db_path: &str, tx: &mpsc::Sender<TaskResult>) {
     let db_path = db_path.to_string();
     let tx = tx.clone();
     std::thread::spawn(move || {

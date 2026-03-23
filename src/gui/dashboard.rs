@@ -1,9 +1,9 @@
-use std::sync::mpsc;
 use eframe::egui;
-use humansize::{format_size, DECIMAL};
+use humansize::{DECIMAL, format_size};
+use std::sync::mpsc;
 
-use crate::db::DbStats;
 use super::TaskResult;
+use crate::db::DbStats;
 
 #[derive(Default)]
 pub struct DashboardState {
@@ -11,11 +11,11 @@ pub struct DashboardState {
 }
 
 pub fn show(
-    ui:      &mut egui::Ui,
-    state:   &mut DashboardState,
-    ctx:     &egui::Context,
+    ui: &mut egui::Ui,
+    state: &mut DashboardState,
+    ctx: &egui::Context,
     db_path: &str,
-    tx:      &mpsc::Sender<TaskResult>,
+    tx: &mpsc::Sender<TaskResult>,
 ) {
     ui.horizontal(|ui| {
         ui.heading("📊 Dashboard");
@@ -45,14 +45,30 @@ pub fn show(
 fn show_stats(ui: &mut egui::Ui, s: &DbStats) {
     // ── Stat cards ────────────────────────────────────────────────────────
     ui.horizontal_wrapped(|ui| {
-        stat_card(ui, "Archivos únicos",       &s.total.to_string(),
-                  egui::Color32::from_rgb(90, 160, 255));
-        stat_card(ui, "Duplicados",            &s.dupes.to_string(),
-                  egui::Color32::from_rgb(255, 90, 90));
-        stat_card(ui, "Tamaño total",          &format_size(s.bytes as u64, DECIMAL),
-                  egui::Color32::from_rgb(80, 200, 120));
-        stat_card(ui, "Recuperable (dupes)",   &format_size(s.bytes_dup as u64, DECIMAL),
-                  egui::Color32::from_rgb(255, 190, 50));
+        stat_card(
+            ui,
+            "Archivos únicos",
+            &s.total.to_string(),
+            egui::Color32::from_rgb(90, 160, 255),
+        );
+        stat_card(
+            ui,
+            "Duplicados",
+            &s.dupes.to_string(),
+            egui::Color32::from_rgb(255, 90, 90),
+        );
+        stat_card(
+            ui,
+            "Tamaño total",
+            &format_size(s.bytes as u64, DECIMAL),
+            egui::Color32::from_rgb(80, 200, 120),
+        );
+        stat_card(
+            ui,
+            "Recuperable (dupes)",
+            &format_size(s.bytes_dup as u64, DECIMAL),
+            egui::Color32::from_rgb(255, 190, 50),
+        );
     });
 
     ui.add_space(20.0);
@@ -65,26 +81,29 @@ fn show_stats(ui: &mut egui::Ui, s: &DbStats) {
     for (type_name, count, bytes) in &s.by_type {
         let (icon, color) = type_style(type_name);
         ui.horizontal(|ui| {
-            ui.add_sized([14.0, 18.0], egui::Label::new(
-                egui::RichText::new(icon).color(color)
-            ));
-            ui.add_sized([60.0, 18.0], egui::Label::new(
-                egui::RichText::new(type_name.to_uppercase())
-                    .color(color)
-                    .strong()
-            ));
-            ui.add_sized([70.0, 18.0], egui::Label::new(
-                format!("{count} archivos")
-            ));
-            ui.add_sized([90.0, 18.0], egui::Label::new(
-                egui::RichText::new(format_size(*bytes as u64, DECIMAL)).weak()
-            ));
+            ui.add_sized(
+                [14.0, 18.0],
+                egui::Label::new(egui::RichText::new(icon).color(color)),
+            );
+            ui.add_sized(
+                [60.0, 18.0],
+                egui::Label::new(
+                    egui::RichText::new(type_name.to_uppercase())
+                        .color(color)
+                        .strong(),
+                ),
+            );
+            ui.add_sized([70.0, 18.0], egui::Label::new(format!("{count} archivos")));
+            ui.add_sized(
+                [90.0, 18.0],
+                egui::Label::new(egui::RichText::new(format_size(*bytes as u64, DECIMAL)).weak()),
+            );
             let frac = *count as f32 / total;
             ui.add(
                 egui::ProgressBar::new(frac)
                     .desired_width(220.0)
                     .fill(color)
-                    .text(format!("{:.1}%", frac * 100.0))
+                    .text(format!("{:.1}%", frac * 100.0)),
             );
         });
         ui.add_space(2.0);
@@ -100,10 +119,7 @@ fn stat_card(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32) 
             ui.set_min_width(150.0);
             ui.vertical(|ui| {
                 ui.add(egui::Label::new(
-                    egui::RichText::new(value)
-                        .size(30.0)
-                        .strong()
-                        .color(color),
+                    egui::RichText::new(value).size(30.0).strong().color(color),
                 ));
                 ui.label(label);
             });
@@ -112,12 +128,12 @@ fn stat_card(ui: &mut egui::Ui, label: &str, value: &str, color: egui::Color32) 
 
 fn type_style(t: &str) -> (&'static str, egui::Color32) {
     match t {
-        "3d"    => ("⬡", egui::Color32::from_rgb(80, 210, 210)),
+        "3d" => ("⬡", egui::Color32::from_rgb(80, 210, 210)),
         "video" => ("▶", egui::Color32::from_rgb(80, 140, 255)),
         "audio" => ("♪", egui::Color32::from_rgb(200, 90, 255)),
         "image" => ("🖼", egui::Color32::from_rgb(255, 210, 50)),
         "other" => ("·", egui::Color32::GRAY),
-        _       => ("?", egui::Color32::WHITE),
+        _ => ("?", egui::Color32::WHITE),
     }
 }
 

@@ -1,29 +1,29 @@
+use eframe::egui;
 use std::path::Path;
 use std::sync::mpsc;
-use eframe::egui;
 
 use super::{TaskResult, VerifyEntry, VerifyStatus};
 
 #[derive(Default)]
 pub struct MaintenanceState {
-    pub verify_results:  Vec<VerifyEntry>,
-    pub thumbs_result:   Option<(usize, usize, usize)>,  // ok, skipped, errors
-    pub clean_result:    Option<usize>,
+    pub verify_results: Vec<VerifyEntry>,
+    pub thumbs_result: Option<(usize, usize, usize)>, // ok, skipped, errors
+    pub clean_result: Option<usize>,
     // Thumbs options
-    thumb_size:          u32,
-    thumb_quality:       u8,
-    thumb_force:         bool,
-    thumb_type:          ThumbType,
+    thumb_size: u32,
+    thumb_quality: u8,
+    thumb_force: bool,
+    thumb_type: ThumbType,
     // Active sub-panel
-    panel:               MainPanel,
+    panel: MainPanel,
     // Verify prune option
-    verify_prune:        bool,
+    verify_prune: bool,
 }
 
 impl MaintenanceState {
     pub fn initialized() -> Self {
         Self {
-            thumb_size:    256,
+            thumb_size: 256,
             thumb_quality: 85,
             ..Default::default()
         }
@@ -31,31 +31,54 @@ impl MaintenanceState {
 }
 
 #[derive(Default, PartialEq, Clone, Copy)]
-enum MainPanel { #[default] Verify, Thumbs, Clean, Doctor, Empty }
+enum MainPanel {
+    #[default]
+    Verify,
+    Thumbs,
+    Clean,
+    Doctor,
+    Empty,
+}
 
 #[derive(Default, PartialEq, Clone, Copy)]
-enum ThumbType { #[default] All, Image, Video, Td }
+enum ThumbType {
+    #[default]
+    All,
+    Image,
+    Video,
+    Td,
+}
 
 impl ThumbType {
     fn label(self) -> &'static str {
-        match self { Self::All => "Todos", Self::Image => "Imágenes",
-                     Self::Video => "Video", Self::Td => "3D" }
+        match self {
+            Self::All => "Todos",
+            Self::Image => "Imágenes",
+            Self::Video => "Video",
+            Self::Td => "3D",
+        }
     }
     fn as_db_str(self) -> Option<&'static str> {
-        match self { Self::All => None, Self::Image => Some("image"),
-                     Self::Video => Some("video"), Self::Td => Some("3d") }
+        match self {
+            Self::All => None,
+            Self::Image => Some("image"),
+            Self::Video => Some("video"),
+            Self::Td => Some("3d"),
+        }
     }
 }
 
 pub fn show(
-    ui:      &mut egui::Ui,
-    state:   &mut MaintenanceState,
-    ctx:     &egui::Context,
+    ui: &mut egui::Ui,
+    state: &mut MaintenanceState,
+    ctx: &egui::Context,
     db_path: &str,
-    tx:      &mpsc::Sender<TaskResult>,
+    tx: &mpsc::Sender<TaskResult>,
 ) {
     // Lazy init
-    if state.thumb_size == 0 { *state = MaintenanceState::initialized(); }
+    if state.thumb_size == 0 {
+        *state = MaintenanceState::initialized();
+    }
 
     ui.heading("🛠 Mantenimiento");
     ui.separator();
@@ -63,11 +86,11 @@ pub fn show(
     // ── Tab bar ───────────────────────────────────────────────────────────
     ui.horizontal(|ui| {
         for (panel, icon, label) in [
-            (MainPanel::Verify,  "✔",  "Verificar"),
-            (MainPanel::Thumbs,  "🖼", "Miniaturas"),
-            (MainPanel::Clean,   "🧹", "Limpiar BD"),
-            (MainPanel::Doctor,  "💊", "Doctor"),
-            (MainPanel::Empty,   "🗑", "Vacíos/Rotos"),
+            (MainPanel::Verify, "✔", "Verificar"),
+            (MainPanel::Thumbs, "🖼", "Miniaturas"),
+            (MainPanel::Clean, "🧹", "Limpiar BD"),
+            (MainPanel::Doctor, "💊", "Doctor"),
+            (MainPanel::Empty, "🗑", "Vacíos/Rotos"),
         ] {
             let text = format!("{icon} {label}");
             if ui.selectable_label(state.panel == panel, &text).clicked() {
@@ -79,26 +102,29 @@ pub fn show(
     ui.separator();
 
     match state.panel {
-        MainPanel::Verify  => panel_verify(ui, state, ctx, db_path, tx),
-        MainPanel::Thumbs  => panel_thumbs(ui, state, ctx, db_path, tx),
-        MainPanel::Clean   => panel_clean(ui, state, ctx, db_path, tx),
-        MainPanel::Doctor  => panel_doctor(ui),
-        MainPanel::Empty   => panel_empty(ui, db_path),
+        MainPanel::Verify => panel_verify(ui, state, ctx, db_path, tx),
+        MainPanel::Thumbs => panel_thumbs(ui, state, ctx, db_path, tx),
+        MainPanel::Clean => panel_clean(ui, state, ctx, db_path, tx),
+        MainPanel::Doctor => panel_doctor(ui),
+        MainPanel::Empty => panel_empty(ui, db_path),
     }
 }
 
 // ── Verify ────────────────────────────────────────────────────────────────
 
 fn panel_verify(
-    ui:      &mut egui::Ui,
-    state:   &mut MaintenanceState,
-    ctx:     &egui::Context,
+    ui: &mut egui::Ui,
+    state: &mut MaintenanceState,
+    ctx: &egui::Context,
     db_path: &str,
-    tx:      &mpsc::Sender<TaskResult>,
+    tx: &mpsc::Sender<TaskResult>,
 ) {
     ui.label("Re-verifica los hashes de todos los archivos indexados.");
     ui.horizontal(|ui| {
-        ui.checkbox(&mut state.verify_prune, "Eliminar de BD los archivos faltantes o corruptos");
+        ui.checkbox(
+            &mut state.verify_prune,
+            "Eliminar de BD los archivos faltantes o corruptos",
+        );
         if ui.button("▶ Verificar").clicked() {
             run_verify(ctx.clone(), db_path, state.verify_prune, tx);
         }
@@ -110,16 +136,34 @@ fn panel_verify(
         return;
     }
 
-    let ok      = state.verify_results.iter().filter(|e| matches!(e.status, VerifyStatus::Ok)).count();
-    let missing = state.verify_results.iter().filter(|e| matches!(e.status, VerifyStatus::Missing)).count();
-    let corrupt = state.verify_results.iter().filter(|e| matches!(e.status, VerifyStatus::Corrupted)).count();
+    let ok = state
+        .verify_results
+        .iter()
+        .filter(|e| matches!(e.status, VerifyStatus::Ok))
+        .count();
+    let missing = state
+        .verify_results
+        .iter()
+        .filter(|e| matches!(e.status, VerifyStatus::Missing))
+        .count();
+    let corrupt = state
+        .verify_results
+        .iter()
+        .filter(|e| matches!(e.status, VerifyStatus::Corrupted))
+        .count();
 
     ui.horizontal(|ui| {
-        ui.colored_label(egui::Color32::from_rgb(80, 200, 80),   format!("✓ OK: {ok}"));
+        ui.colored_label(egui::Color32::from_rgb(80, 200, 80), format!("✓ OK: {ok}"));
         ui.separator();
-        ui.colored_label(egui::Color32::from_rgb(255, 200, 50),  format!("⚠ Faltantes: {missing}"));
+        ui.colored_label(
+            egui::Color32::from_rgb(255, 200, 50),
+            format!("⚠ Faltantes: {missing}"),
+        );
         ui.separator();
-        ui.colored_label(egui::Color32::from_rgb(255, 90, 90),   format!("✗ Corruptos: {corrupt}"));
+        ui.colored_label(
+            egui::Color32::from_rgb(255, 90, 90),
+            format!("✗ Corruptos: {corrupt}"),
+        );
     });
     ui.separator();
 
@@ -131,35 +175,44 @@ fn panel_verify(
             .column(egui_extras::Column::initial(200.0))
             .column(egui_extras::Column::remainder())
             .header(20.0, |mut h| {
-                h.col(|ui| { ui.strong("Estado"); });
-                h.col(|ui| { ui.strong("Nombre"); });
-                h.col(|ui| { ui.strong("Ruta"); });
+                h.col(|ui| {
+                    ui.strong("Estado");
+                });
+                h.col(|ui| {
+                    ui.strong("Nombre");
+                });
+                h.col(|ui| {
+                    ui.strong("Ruta");
+                });
             })
             .body(|mut body| {
                 for entry in &state.verify_results {
                     body.row(18.0, |mut row| {
                         row.col(|ui| {
                             let (label, color) = match entry.status {
-                                VerifyStatus::Ok        => ("✓ OK",       egui::Color32::from_rgb(80,200,80)),
-                                VerifyStatus::Missing   => ("⚠ Faltante", egui::Color32::from_rgb(255,200,50)),
-                                VerifyStatus::Corrupted => ("✗ Corrupto", egui::Color32::from_rgb(255,90,90)),
+                                VerifyStatus::Ok => ("✓ OK", egui::Color32::from_rgb(80, 200, 80)),
+                                VerifyStatus::Missing => {
+                                    ("⚠ Faltante", egui::Color32::from_rgb(255, 200, 50))
+                                }
+                                VerifyStatus::Corrupted => {
+                                    ("✗ Corrupto", egui::Color32::from_rgb(255, 90, 90))
+                                }
                             };
                             ui.colored_label(color, label);
                         });
-                        row.col(|ui| { ui.label(&entry.name); });
-                        row.col(|ui| { ui.label(egui::RichText::new(&entry.path).weak().size(11.0)); });
+                        row.col(|ui| {
+                            ui.label(&entry.name);
+                        });
+                        row.col(|ui| {
+                            ui.label(egui::RichText::new(&entry.path).weak().size(11.0));
+                        });
                     });
                 }
             });
     });
 }
 
-fn run_verify(
-    ctx:     egui::Context,
-    db_path: &str,
-    prune:   bool,
-    tx:      &mpsc::Sender<TaskResult>,
-) {
+fn run_verify(ctx: egui::Context, db_path: &str, prune: bool, tx: &mpsc::Sender<TaskResult>) {
     let db_path = db_path.to_string();
     let tx = tx.clone();
     std::thread::spawn(move || {
@@ -171,10 +224,15 @@ fn run_verify(
             for (id, stored_hash, path, _size) in files {
                 let p = Path::new(&path);
                 if !p.exists() {
-                    if prune { let _ = db.remove_file(id); }
+                    if prune {
+                        let _ = db.remove_file(id);
+                    }
                     entries.push(VerifyEntry {
-                        name:   p.file_name().map(|n| n.to_string_lossy().into()).unwrap_or_default(),
-                        path:   path.clone(),
+                        name: p
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into())
+                            .unwrap_or_default(),
+                        path: path.clone(),
                         status: VerifyStatus::Missing,
                     });
                     continue;
@@ -185,13 +243,18 @@ fn run_verify(
                 let status = match current_hash {
                     Ok(h) if h == stored_hash => VerifyStatus::Ok,
                     Ok(_) => {
-                        if prune { let _ = db.remove_file(id); }
+                        if prune {
+                            let _ = db.remove_file(id);
+                        }
                         VerifyStatus::Corrupted
                     }
                     Err(_) => VerifyStatus::Missing,
                 };
                 entries.push(VerifyEntry {
-                    name:   p.file_name().map(|n| n.to_string_lossy().into()).unwrap_or_default(),
+                    name: p
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into())
+                        .unwrap_or_default(),
                     path,
                     status,
                 });
@@ -211,7 +274,7 @@ fn run_verify(
 fn hash_file(path: &Path) -> anyhow::Result<String> {
     use std::io::Read;
     const THRESHOLD: u64 = 100 * 1024 * 1024;
-    const CHUNK:     u64 =   4 * 1024 * 1024;
+    const CHUNK: u64 = 4 * 1024 * 1024;
 
     let meta = std::fs::metadata(path)?;
     let size = meta.len();
@@ -236,11 +299,11 @@ fn hash_file(path: &Path) -> anyhow::Result<String> {
 // ── Thumbnails ────────────────────────────────────────────────────────────
 
 fn panel_thumbs(
-    ui:      &mut egui::Ui,
-    state:   &mut MaintenanceState,
-    ctx:     &egui::Context,
+    ui: &mut egui::Ui,
+    state: &mut MaintenanceState,
+    ctx: &egui::Context,
     db_path: &str,
-    tx:      &mpsc::Sender<TaskResult>,
+    tx: &mpsc::Sender<TaskResult>,
 ) {
     ui.label("Genera miniaturas JPEG para imágenes, videos y modelos 3D.");
     ui.add_space(6.0);
@@ -251,8 +314,16 @@ fn panel_thumbs(
         .show(ui, |ui| {
             ui.label("Tipo:");
             ui.horizontal(|ui| {
-                for t in [ThumbType::All, ThumbType::Image, ThumbType::Video, ThumbType::Td] {
-                    if ui.selectable_label(state.thumb_type == t, t.label()).clicked() {
+                for t in [
+                    ThumbType::All,
+                    ThumbType::Image,
+                    ThumbType::Video,
+                    ThumbType::Td,
+                ] {
+                    if ui
+                        .selectable_label(state.thumb_type == t, t.label())
+                        .clicked()
+                    {
                         state.thumb_type = t;
                     }
                 }
@@ -280,29 +351,37 @@ fn panel_thumbs(
     if let Some((ok, skipped, errors)) = state.thumbs_result {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            ui.colored_label(egui::Color32::from_rgb(80,200,80),  format!("✓ Generadas: {ok}"));
+            ui.colored_label(
+                egui::Color32::from_rgb(80, 200, 80),
+                format!("✓ Generadas: {ok}"),
+            );
             ui.separator();
-            ui.colored_label(egui::Color32::GRAY,                  format!("→ Omitidas: {skipped}"));
+            ui.colored_label(egui::Color32::GRAY, format!("→ Omitidas: {skipped}"));
             if errors > 0 {
                 ui.separator();
-                ui.colored_label(egui::Color32::from_rgb(255,90,90), format!("✗ Errores: {errors}"));
+                ui.colored_label(
+                    egui::Color32::from_rgb(255, 90, 90),
+                    format!("✗ Errores: {errors}"),
+                );
             }
         });
     }
 }
 
 fn run_thumbs(
-    ctx:     egui::Context,
+    ctx: egui::Context,
     db_path: &str,
-    state:   &MaintenanceState,
-    tx:      &mpsc::Sender<TaskResult>,
+    state: &MaintenanceState,
+    tx: &mpsc::Sender<TaskResult>,
 ) {
-    use crate::thumbs::{thumb_dir_for_db, thumb_path, generate_image, generate_video, generate_3d};
+    use crate::thumbs::{
+        generate_3d, generate_image, generate_video, thumb_dir_for_db, thumb_path,
+    };
 
-    let db_path  = db_path.to_string();
-    let size     = state.thumb_size;
-    let quality  = state.thumb_quality;
-    let force    = state.thumb_force;
+    let db_path = db_path.to_string();
+    let size = state.thumb_size;
+    let quality = state.thumb_quality;
+    let force = state.thumb_force;
     let type_str = state.thumb_type.as_db_str();
     let tx = tx.clone();
 
@@ -320,27 +399,32 @@ fn run_thumbs(
                     continue;
                 }
                 let res = match media_type.as_str() {
-                    "image" => generate_image(
-                        path, hash, &thumb_dir, size, quality
-                    ),
-                    "video" => generate_video(
-                        path, hash, &thumb_dir, size, quality
-                    ),
-                    "3d" => {
-                        match std::fs::read(path) {
-                            Ok(data) => generate_3d(&data, ext, hash, &thumb_dir, size, quality),
-                            Err(e)   => Err(anyhow::anyhow!("{e}")),
-                        }
+                    "image" => generate_image(path, hash, &thumb_dir, size, quality),
+                    "video" => generate_video(path, hash, &thumb_dir, size, quality),
+                    "3d" => match std::fs::read(path) {
+                        Ok(data) => generate_3d(&data, ext, hash, &thumb_dir, size, quality),
+                        Err(e) => Err(anyhow::anyhow!("{e}")),
+                    },
+                    _ => {
+                        skipped += 1;
+                        continue;
                     }
-                    _ => { skipped += 1; continue; }
                 };
-                if res.is_ok() { ok += 1; } else { errors += 1; }
+                if res.is_ok() {
+                    ok += 1;
+                } else {
+                    errors += 1;
+                }
             }
             Ok((ok, skipped, errors))
         })();
 
         let msg = result
-            .map(|(ok, sk, er)| TaskResult::ThumbsComplete { ok, skipped: sk, errors: er })
+            .map(|(ok, sk, er)| TaskResult::ThumbsComplete {
+                ok,
+                skipped: sk,
+                errors: er,
+            })
             .unwrap_or_else(|e| TaskResult::Error(e.to_string()));
         let _ = tx.send(msg);
         ctx.request_repaint();
@@ -350,11 +434,11 @@ fn run_thumbs(
 // ── Clean ─────────────────────────────────────────────────────────────────
 
 fn panel_clean(
-    ui:      &mut egui::Ui,
-    state:   &mut MaintenanceState,
-    ctx:     &egui::Context,
+    ui: &mut egui::Ui,
+    state: &mut MaintenanceState,
+    ctx: &egui::Context,
     db_path: &str,
-    tx:      &mpsc::Sender<TaskResult>,
+    tx: &mpsc::Sender<TaskResult>,
 ) {
     ui.label("Elimina entradas no deseadas de la base de datos sin tocar los archivos.");
     ui.add_space(8.0);
@@ -419,15 +503,27 @@ fn panel_doctor(ui: &mut egui::Ui) {
     ui.add_space(10.0);
 
     let checks = [
-        ("ffprobe (metadatos de video)",
-         std::process::Command::new("ffprobe").arg("-version").output().is_ok(),
-         "sudo apt install ffmpeg  /  brew install ffmpeg"),
-        ("unrar (archivos .rar)",
-         std::process::Command::new("unrar").arg("--help").output().is_ok(),
-         "sudo apt install unrar  /  brew install rar"),
-        ("stl-thumb (miniaturas 3D)",
-         crate::thumbs::stl_thumb_available(),
-         "https://github.com/unlimitedbacon/stl-thumb/releases"),
+        (
+            "ffprobe (metadatos de video)",
+            std::process::Command::new("ffprobe")
+                .arg("-version")
+                .output()
+                .is_ok(),
+            "sudo apt install ffmpeg  /  brew install ffmpeg",
+        ),
+        (
+            "unrar (archivos .rar)",
+            std::process::Command::new("unrar")
+                .arg("--help")
+                .output()
+                .is_ok(),
+            "sudo apt install unrar  /  brew install rar",
+        ),
+        (
+            "stl-thumb (miniaturas 3D)",
+            crate::thumbs::stl_thumb_available(),
+            "https://github.com/unlimitedbacon/stl-thumb/releases",
+        ),
     ];
 
     egui::Grid::new("doctor_grid")
@@ -436,13 +532,17 @@ fn panel_doctor(ui: &mut egui::Ui) {
         .show(ui, |ui| {
             for (name, ok, hint) in &checks {
                 if *ok {
-                    ui.colored_label(egui::Color32::from_rgb(80,200,80), "✓");
+                    ui.colored_label(egui::Color32::from_rgb(80, 200, 80), "✓");
                 } else {
-                    ui.colored_label(egui::Color32::from_rgb(255,90,90), "✗");
+                    ui.colored_label(egui::Color32::from_rgb(255, 90, 90), "✗");
                 }
                 ui.label(*name);
                 if !ok {
-                    ui.label(egui::RichText::new(format!("Instalar: {hint}")).weak().size(11.0));
+                    ui.label(
+                        egui::RichText::new(format!("Instalar: {hint}"))
+                            .weak()
+                            .size(11.0),
+                    );
                 } else {
                     ui.label(egui::RichText::new("Disponible").weak());
                 }
@@ -452,7 +552,7 @@ fn panel_doctor(ui: &mut egui::Ui) {
 
     ui.add_space(10.0);
     ui.colored_label(
-        egui::Color32::from_rgb(80,200,80),
+        egui::Color32::from_rgb(80, 200, 80),
         "✓ ZIP, 7Z, audio, imagen: Rust puro — sin dependencias externas.",
     );
 }

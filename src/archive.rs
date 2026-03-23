@@ -1,20 +1,20 @@
-use std::path::Path;
-use anyhow::Result;
 use crate::models::ArchiveType;
+use anyhow::Result;
+use std::path::Path;
 
 /// A file extracted in memory
 pub struct ExtractedFile {
     pub name: String,
     pub data: Vec<u8>,
-    pub ext:  String,
+    pub ext: String,
 }
 
 /// Extracts all media files from an archive
 pub fn extract_media_files(path: &Path, archive_type: &ArchiveType) -> Result<Vec<ExtractedFile>> {
     match archive_type {
-        ArchiveType::Zip      => extract_zip(path),
+        ArchiveType::Zip => extract_zip(path),
         ArchiveType::SevenZip => extract_7z(path),
-        ArchiveType::Rar      => extract_rar(path),
+        ArchiveType::Rar => extract_rar(path),
     }
 }
 
@@ -28,11 +28,25 @@ fn is_macos_junk(name: &str) -> bool {
     // Normalize path separators for uniform comparison
     let n = name.replace('\\', "/");
     // Any path segment equal to __MACOSX
-    if n.split('/').any(|seg| seg == "__MACOSX") { return true; }
+    if n.split('/').any(|seg| seg == "__MACOSX") {
+        return true;
+    }
     // File whose basename starts with ._ (AppleDouble resource fork)
-    if n.split('/').last().map(|base| base.starts_with("._")).unwrap_or(false) { return true; }
+    if n.split('/')
+        .last()
+        .map(|base| base.starts_with("._"))
+        .unwrap_or(false)
+    {
+        return true;
+    }
     // .DS_Store
-    if n.split('/').last().map(|base| base == ".DS_Store").unwrap_or(false) { return true; }
+    if n.split('/')
+        .last()
+        .map(|base| base == ".DS_Store")
+        .unwrap_or(false)
+    {
+        return true;
+    }
     false
 }
 
@@ -47,21 +61,32 @@ fn extract_zip(path: &Path) -> Result<Vec<ExtractedFile>> {
     let mut entries_read = 0usize;
 
     for i in 0..archive.len() {
-        if entries_read >= MAX_ARCHIVE_ENTRIES { break; }
+        if entries_read >= MAX_ARCHIVE_ENTRIES {
+            break;
+        }
 
         let mut entry = match archive.by_index(i) {
-            Ok(e) => e, Err(_) => continue,
+            Ok(e) => e,
+            Err(_) => continue,
         };
-        if entry.is_dir() { continue; }
+        if entry.is_dir() {
+            continue;
+        }
         let name = entry.name().to_string();
-        if is_macos_junk(&name) { continue; }
+        if is_macos_junk(&name) {
+            continue;
+        }
         let ext = ext_of(&name);
 
-        if entry.size() > MAX_IN_MEMORY { continue; }
+        if entry.size() > MAX_IN_MEMORY {
+            continue;
+        }
 
         entries_read += 1;
         let mut data = Vec::with_capacity(entry.size() as usize);
-        if std::io::copy(&mut entry, &mut data).is_err() { continue; }
+        if std::io::copy(&mut entry, &mut data).is_err() {
+            continue;
+        }
         results.push(ExtractedFile { name, data, ext });
     }
     Ok(results)
@@ -75,14 +100,22 @@ fn extract_7z(path: &Path) -> Result<Vec<ExtractedFile>> {
     let mut entries_read = 0usize;
 
     archive.for_each_entries(|entry, reader| {
-        if entry.is_directory() { return Ok(true); }
-        if entries_read >= MAX_ARCHIVE_ENTRIES { return Ok(false); }
+        if entry.is_directory() {
+            return Ok(true);
+        }
+        if entries_read >= MAX_ARCHIVE_ENTRIES {
+            return Ok(false);
+        }
         let name = entry.name().to_string();
-        if is_macos_junk(&name) { return Ok(true); }
+        if is_macos_junk(&name) {
+            return Ok(true);
+        }
         let ext = ext_of(&name);
 
         // Skip oversized entries before reading
-        if entry.size() > MAX_IN_MEMORY { return Ok(true); }
+        if entry.size() > MAX_IN_MEMORY {
+            return Ok(true);
+        }
         let mut data = Vec::with_capacity(entry.size() as usize);
         if std::io::copy(reader, &mut data).is_ok() {
             results.push(ExtractedFile { name, data, ext });
@@ -116,13 +149,13 @@ fn extract_rar(path: &Path) -> Result<Vec<ExtractedFile>> {
         path.hash(&mut h);
         h.finish()
     };
-    let tmp = std::env::temp_dir()
-        .join(format!("media_idx_rar_{}_{:016x}",
-            path.file_stem()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "tmp".into()),
-            path_hash,
-        ));
+    let tmp = std::env::temp_dir().join(format!(
+        "media_idx_rar_{}_{:016x}",
+        path.file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "tmp".into()),
+        path_hash,
+    ));
     std::fs::create_dir_all(&tmp)?;
 
     Command::new("unrar")
@@ -135,21 +168,30 @@ fn extract_rar(path: &Path) -> Result<Vec<ExtractedFile>> {
     let mut entries_read = 0usize;
 
     for entry in walkdir::WalkDir::new(&tmp).into_iter().flatten() {
-        if entries_read >= MAX_ARCHIVE_ENTRIES { break; }
-        if !entry.file_type().is_file() { continue; }
+        if entries_read >= MAX_ARCHIVE_ENTRIES {
+            break;
+        }
+        if !entry.file_type().is_file() {
+            continue;
+        }
 
-        let rel = entry.path()
+        let rel = entry
+            .path()
             .strip_prefix(&tmp)
             .map(|p| p.to_string_lossy().replace('\\', "/"))
             .unwrap_or_default();
 
-        if is_macos_junk(&rel) { continue; }
+        if is_macos_junk(&rel) {
+            continue;
+        }
 
         let name = rel.clone();
-        let ext  = ext_of(&name);
+        let ext = ext_of(&name);
 
         let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-        if size > MAX_IN_MEMORY { continue; }
+        if size > MAX_IN_MEMORY {
+            continue;
+        }
 
         if let Ok(data) = std::fs::read(entry.path()) {
             results.push(ExtractedFile { name, data, ext });
