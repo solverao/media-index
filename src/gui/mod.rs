@@ -6,7 +6,6 @@ mod scanner_view;
 mod similar;
 
 use eframe::egui;
-use std::path::PathBuf;
 use std::sync::mpsc;
 
 use crate::db::{DbStats, DuplicateGroup, SearchResult};
@@ -52,6 +51,7 @@ pub enum TaskResult {
         skipped: usize,
         errors: usize,
     },
+    ThumbsLoaded(Vec<ThumbEntry>),
     CleanDone(usize),
     Error(String),
     Info(String),
@@ -61,6 +61,13 @@ pub struct VerifyEntry {
     pub name: String,
     pub path: String,
     pub status: VerifyStatus,
+}
+
+pub struct ThumbEntry {
+    pub thumb_path: std::path::PathBuf,
+    pub name: String,
+    pub path: String,
+    pub media_type: String,
 }
 
 pub enum VerifyStatus {
@@ -89,8 +96,8 @@ pub struct MediaIndexApp {
 
     is_loading: bool,
     status_msg: String,
-    #[allow(dead_code)]
-    thumb_scroll: f32,
+    thumb_entries: Vec<ThumbEntry>,
+    thumb_selected: Option<usize>,
 }
 
 impl MediaIndexApp {
@@ -110,7 +117,8 @@ impl MediaIndexApp {
             maintenance: MaintenanceState::default(),
             is_loading: false,
             status_msg: String::new(),
-            thumb_scroll: 0.0,
+            thumb_entries: Vec::new(),
+            thumb_selected: None,
         }
     }
 
@@ -134,6 +142,71 @@ impl MediaIndexApp {
                 Ok(s) => TaskResult::StatsLoaded(s),
                 Err(e) => TaskResult::Error(e.to_string()),
             }
+        });
+    }
+
+    pub fn load_thumbs(&mut self, ctx: egui::Context) {
+        self.is_loading = true;
+        let db_path = self.db_path.clone();
+        let thumb_dir = crate::thumbs::thumb_dir_for_db(&self.db_path);
+        self.spawn(ctx, move || {
+            // 1. Collect .jpg files from the thumbs directory
+            let thumb_paths: Vec<std::path::PathBuf> = std::fs::read_dir(&thumb_dir)
+                .into_iter()
+                .flat_map(|rd| rd.flatten())
+                .filter(|e| e.path().is_dir())
+                .flat_map(|e| {
+                    std::fs::read_dir(e.path())
+                        .into_iter()
+                        .flat_map(|rd| rd.flatten())
+                        .map(|e| e.path())
+                        .filter(|p| p.extension().map(|x| x == "jpg").unwrap_or(false))
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+
+            if thumb_paths.is_empty() {
+                return TaskResult::ThumbsLoaded(vec![]);
+            }
+
+            // 2. Extract hashes from filenames
+            let hashes: Vec<String> = thumb_paths
+                .iter()
+                .filter_map(|p| p.file_stem()?.to_str().map(|s| s.to_string()))
+                .collect();
+
+            // 3. Look up file info in the database
+            let db_info = match crate::db::Database::open(&db_path)
+                .and_then(|db| db.files_by_hashes(&hashes))
+            {
+                Ok(info) => info,
+                Err(_) => vec![],
+            };
+
+            // 4. Build a hash → (name, path, type) map
+            let mut info_map: std::collections::HashMap<String, (String, String, String)> =
+                db_info
+                    .into_iter()
+                    .map(|(hash, name, path, mt)| (hash, (name, path, mt)))
+                    .collect();
+
+            // 5. Build final entries; fall back to hash as name if not in DB
+            let entries = thumb_paths
+                .into_iter()
+                .map(|thumb_path| {
+                    let hash = thumb_path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let (name, path, media_type) = info_map.remove(&hash).unwrap_or_else(|| {
+                        (hash[..8.min(hash.len())].to_string(), String::new(), String::new())
+                    });
+                    ThumbEntry { thumb_path, name, path, media_type }
+                })
+                .collect();
+
+            TaskResult::ThumbsLoaded(entries)
         });
     }
 
@@ -191,6 +264,10 @@ impl MediaIndexApp {
                     errors,
                 } => {
                     self.maintenance.thumbs_result = Some((ok, skipped, errors));
+                }
+                TaskResult::ThumbsLoaded(entries) => {
+                    self.thumb_entries = entries;
+                    self.thumb_selected = None;
                 }
                 TaskResult::CleanDone(n) => {
                     self.maintenance.clean_result = Some(n);
@@ -263,6 +340,7 @@ impl MediaIndexApp {
                         match view {
                             View::Dashboard => self.load_stats(ctx.clone()),
                             View::Duplicates => self.load_dupes(ctx.clone()),
+                            View::Thumbnails => self.load_thumbs(ctx.clone()),
                             _ => {}
                         }
                     }
@@ -270,65 +348,175 @@ impl MediaIndexApp {
             });
     }
 
-    fn show_thumbnails_view(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context) {
+    fn show_thumbnails_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let thumb_dir = crate::thumbs::thumb_dir_for_db(&self.db_path);
 
         ui.horizontal(|ui| {
-            ui.heading("Miniaturas");
+            ui.heading("🖼 Miniaturas");
+            if ui.button("↺ Recargar").clicked() {
+                self.load_thumbs(ctx.clone());
+            }
             if ui.button("Generar →").clicked() {
                 self.active_view = View::Maintenance;
             }
         });
-        ui.label(format!("Directorio: {}", thumb_dir.display()));
         ui.separator();
 
-        if !thumb_dir.exists() {
-            ui.colored_label(
-                egui::Color32::from_rgb(255, 200, 50),
-                "No hay miniaturas generadas todavía. Usa Mantenimiento → Generar Miniaturas.",
-            );
+        if !thumb_dir.exists() || self.thumb_entries.is_empty() {
+            if self.is_loading {
+                ui.spinner();
+                ui.label("Cargando miniaturas…");
+            } else {
+                ui.colored_label(
+                    egui::Color32::from_rgb(255, 200, 50),
+                    "No hay miniaturas generadas todavía. Usa Mantenimiento → Generar Miniaturas.",
+                );
+            }
             return;
         }
 
-        // Collect .jpg files from prefix subdirs
-        let thumbs: Vec<PathBuf> = std::fs::read_dir(&thumb_dir)
-            .into_iter()
-            .flat_map(|rd| rd.flatten())
-            .filter(|e| e.path().is_dir())
-            .flat_map(|e| {
-                std::fs::read_dir(e.path())
-                    .into_iter()
-                    .flat_map(|rd| rd.flatten())
-                    .map(|e| e.path())
-                    .filter(|p| p.extension().map(|x| x == "jpg").unwrap_or(false))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-
-        ui.label(format!("{} miniaturas", thumbs.len()));
+        ui.label(format!("{} miniaturas", self.thumb_entries.len()));
         ui.separator();
 
-        let cell = 140.0_f32;
-        let cols = ((ui.available_width() / cell) as usize).max(1);
+        // ── Detail panel (right) ──────────────────────────────────────────
+        if let Some(idx) = self.thumb_selected {
+            if let Some(entry) = self.thumb_entries.get(idx) {
+                let name = entry.name.clone();
+                let path = entry.path.clone();
+                let media_type = entry.media_type.clone();
+                let thumb_path = entry.thumb_path.clone();
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            egui::Grid::new("thumb_grid")
-                .min_col_width(cell)
-                .max_col_width(cell)
-                .spacing([4.0, 4.0])
-                .show(ui, |ui| {
-                    for (i, path) in thumbs.iter().enumerate() {
-                        let uri = format!("file://{}", path.display());
-                        let img = egui::Image::new(uri)
-                            .max_size(egui::vec2(cell - 8.0, cell - 8.0))
-                            .fit_to_exact_size(egui::vec2(cell - 8.0, cell - 8.0))
-                            .rounding(egui::Rounding::same(4.0));
-                        ui.add(img);
-                        if (i + 1) % cols == 0 {
-                            ui.end_row();
+                egui::SidePanel::right("thumb_detail")
+                    .resizable(true)
+                    .min_width(200.0)
+                    .default_width(240.0)
+                    .show_inside(ui, |ui| {
+                        ui.add_space(4.0);
+                        ui.heading("Archivo original");
+                        ui.separator();
+
+                        // Preview larger
+                        let uri = format!("file://{}", thumb_path.display());
+                        ui.add(
+                            egui::Image::new(uri)
+                                .max_size(egui::vec2(220.0, 180.0))
+                                .fit_to_exact_size(egui::vec2(220.0, 180.0))
+                                .rounding(egui::Rounding::same(6.0)),
+                        );
+                        ui.add_space(8.0);
+
+                        egui::Grid::new("thumb_detail_grid")
+                            .num_columns(2)
+                            .spacing([6.0, 4.0])
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new("Nombre:").weak());
+                                ui.label(&name);
+                                ui.end_row();
+                                if !media_type.is_empty() {
+                                    ui.label(egui::RichText::new("Tipo:").weak());
+                                    ui.label(media_type.to_uppercase());
+                                    ui.end_row();
+                                }
+                            });
+
+                        ui.add_space(6.0);
+                        ui.label(egui::RichText::new("Ruta:").weak());
+                        egui::ScrollArea::vertical()
+                            .id_salt("thumb_path_scroll")
+                            .max_height(70.0)
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new(&path).weak().size(11.0));
+                            });
+
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("📋 Copiar ruta").clicked() {
+                                ui.output_mut(|o| o.copied_text = path.clone());
+                            }
+                            #[cfg(target_os = "linux")]
+                            if ui.button("📂 Abrir carpeta").clicked() {
+                                let dir = std::path::Path::new(&path)
+                                    .parent()
+                                    .map(|p| p.to_string_lossy().to_string())
+                                    .unwrap_or_default();
+                                let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
+                            }
+                        });
+                        #[cfg(target_os = "linux")]
+                        if ui.button("▶ Abrir archivo").clicked() {
+                            let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
                         }
-                    }
-                });
+                    });
+            }
+        }
+
+        // ── Thumbnail grid ────────────────────────────────────────────────
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            let cell = 140.0_f32;
+            let label_h = 32.0_f32;
+            let cols = ((ui.available_width() / (cell + 4.0)) as usize).max(1);
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::Grid::new("thumb_grid")
+                    .min_col_width(cell)
+                    .max_col_width(cell)
+                    .spacing([4.0, 4.0])
+                    .show(ui, |ui| {
+                        for (i, entry) in self.thumb_entries.iter().enumerate() {
+                            let selected = self.thumb_selected == Some(i);
+                            let uri = format!("file://{}", entry.thumb_path.display());
+                            let img = egui::Image::new(&uri)
+                                .max_size(egui::vec2(cell, cell))
+                                .fit_to_exact_size(egui::vec2(cell, cell))
+                                .rounding(egui::Rounding::same(4.0))
+                                .sense(egui::Sense::click());
+
+                            ui.vertical(|ui| {
+                                ui.set_min_width(cell);
+
+                                // Highlight border when selected
+                                let frame = if selected {
+                                    egui::Frame::default()
+                                        .stroke(egui::Stroke::new(2.0, egui::Color32::from_rgb(80, 160, 255)))
+                                        .rounding(egui::Rounding::same(5.0))
+                                        .inner_margin(egui::Margin::same(2.0))
+                                } else {
+                                    egui::Frame::default()
+                                        .stroke(egui::Stroke::new(1.0, egui::Color32::TRANSPARENT))
+                                        .rounding(egui::Rounding::same(5.0))
+                                        .inner_margin(egui::Margin::same(2.0))
+                                };
+
+                                let resp = frame.show(ui, |ui| ui.add(img));
+                                if resp.inner.clicked() {
+                                    self.thumb_selected = if selected { None } else { Some(i) };
+                                }
+
+                                // Filename label (truncated)
+                                let display_name = if entry.name.len() > 20 {
+                                    format!("{}…", &entry.name[..18])
+                                } else {
+                                    entry.name.clone()
+                                };
+                                let label = ui.add_sized(
+                                    [cell, label_h],
+                                    egui::Label::new(
+                                        egui::RichText::new(display_name).size(11.0),
+                                    )
+                                    .truncate(),
+                                );
+                                // Tooltip with full path
+                                if !entry.path.is_empty() {
+                                    label.on_hover_text(&entry.path);
+                                }
+                            });
+
+                            if (i + 1) % cols == 0 {
+                                ui.end_row();
+                            }
+                        }
+                    });
+            });
         });
     }
 }

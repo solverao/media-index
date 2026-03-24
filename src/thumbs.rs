@@ -233,7 +233,8 @@ fn generate_3d_stlthumb(model_path: &str, hash: &str, thumb_dir: &Path, size: u3
     // physical GPU (WSL2, headless servers) using Mesa's software renderer.
     let result = std::process::Command::new("stl-thumb")
         .env("LIBGL_ALWAYS_SOFTWARE", "1")
-        .args([model_path, &out_str, "-s", &size_str])
+        .env("MESA_GL_VERSION_OVERRIDE", "3.3")
+        .args([model_path, &out_str, "-s", &size_str, "--recalc-normals"])
         .output();
 
     match result {

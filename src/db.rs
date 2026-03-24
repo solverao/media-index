@@ -588,6 +588,30 @@ impl Database {
         Ok(results)
     }
 
+    /// Given a list of blake3 hashes, returns `(hash, original_name, current_path, media_type)`
+    /// for every hash that exists in the database.
+    pub fn files_by_hashes(
+        &self,
+        hashes: &[String],
+    ) -> Result<Vec<(String, String, String, String)>> {
+        if hashes.is_empty() {
+            return Ok(vec![]);
+        }
+        let placeholders = hashes.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT blake3_hash, original_name, current_path, media_type
+             FROM files WHERE blake3_hash IN ({placeholders})"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let results = stmt
+            .query_map(rusqlite::params_from_iter(hashes.iter()), |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(results)
+    }
+
     // ── Queries ───────────────────────────────────────────────────────────
 
     pub fn stats(&self) -> Result<DbStats> {
