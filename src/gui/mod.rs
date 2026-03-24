@@ -5,6 +5,38 @@ mod maintenance;
 mod scanner_view;
 mod similar;
 
+/// Opens `path` (file or directory) with the default system application.
+/// Tries multiple methods in order until one succeeds.
+pub(super) fn open_path(path: &str) {
+    // 1. xdg-open (standard freedesktop, works on most desktop Linux)
+    if std::process::Command::new("xdg-open").arg(path).spawn().is_ok() {
+        return;
+    }
+    // 2. gio open (GNOME without xdg-open)
+    if std::process::Command::new("gio").args(["open", path]).spawn().is_ok() {
+        return;
+    }
+    // 3. D-Bus FileManager1 (works in WSLg and any session with a file manager)
+    //    ShowFolders for directories, ShowItems for files (reveals in parent folder)
+    let uri = format!("file://{path}");
+    let method = if std::path::Path::new(path).is_dir() {
+        "org.freedesktop.FileManager1.ShowFolders"
+    } else {
+        "org.freedesktop.FileManager1.ShowItems"
+    };
+    let _ = std::process::Command::new("dbus-send")
+        .args([
+            "--session",
+            "--dest=org.freedesktop.FileManager1",
+            "--type=method_call",
+            "/org/freedesktop/FileManager1",
+            method,
+            &format!("array:string:{uri}"),
+            "string:",
+        ])
+        .spawn();
+}
+
 use eframe::egui;
 use std::sync::mpsc;
 
@@ -433,18 +465,16 @@ impl MediaIndexApp {
                             if ui.button("📋 Copiar ruta").clicked() {
                                 ui.output_mut(|o| o.copied_text = path.clone());
                             }
-                            #[cfg(target_os = "linux")]
                             if ui.button("📂 Abrir carpeta").clicked() {
                                 let dir = std::path::Path::new(&path)
                                     .parent()
                                     .map(|p| p.to_string_lossy().to_string())
                                     .unwrap_or_default();
-                                let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
+                                open_path(&dir);
                             }
                         });
-                        #[cfg(target_os = "linux")]
                         if ui.button("▶ Abrir archivo").clicked() {
-                            let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+                            open_path(&path);
                         }
                     });
             }

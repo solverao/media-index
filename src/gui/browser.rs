@@ -260,13 +260,15 @@ fn show_detail(ui: &mut egui::Ui, r: &SearchResult) {
     if ui.button("📋 Copiar ruta").clicked() {
         ui.output_mut(|o| o.copied_text = r.path.clone());
     }
-    #[cfg(target_os = "linux")]
     if ui.button("📂 Abrir ubicación").clicked() {
         let dir = std::path::Path::new(&r.path)
             .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        let _ = std::process::Command::new("xdg-open").arg(&dir).spawn();
+        super::open_path(&dir);
+    }
+    if ui.button("▶ Abrir archivo").clicked() {
+        super::open_path(&r.path);
     }
 }
 
