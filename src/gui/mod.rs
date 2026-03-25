@@ -112,6 +112,36 @@ pub enum VerifyStatus {
 
 // ── App ───────────────────────────────────────────────────────────────────
 
+/// Filter for the thumbnail gallery view.
+#[derive(Default, PartialEq, Clone, Copy)]
+enum ThumbFilter {
+    #[default]
+    All,
+    Td,
+    Video,
+    Image,
+}
+
+impl ThumbFilter {
+    fn label(self) -> &'static str {
+        match self {
+            Self::All   => "Todos",
+            Self::Td    => "3D",
+            Self::Video => "Video",
+            Self::Image => "Imagen",
+        }
+    }
+
+    fn matches(self, media_type: &str) -> bool {
+        match self {
+            Self::All   => true,
+            Self::Td    => media_type == "3d",
+            Self::Video => media_type == "video",
+            Self::Image => media_type == "image",
+        }
+    }
+}
+
 pub struct MediaIndexApp {
     db_path: String,
     db_path_input: String,
@@ -132,6 +162,8 @@ pub struct MediaIndexApp {
     status_msg: String,
     thumb_entries: Vec<ThumbEntry>,
     thumb_selected: Option<usize>,
+    thumb_filter: ThumbFilter,
+    thumb_search: String,
 }
 
 impl MediaIndexApp {
@@ -153,6 +185,8 @@ impl MediaIndexApp {
             status_msg: String::new(),
             thumb_entries: Vec::new(),
             thumb_selected: None,
+            thumb_filter: ThumbFilter::default(),
+            thumb_search: String::new(),
         }
     }
 
@@ -394,6 +428,7 @@ impl MediaIndexApp {
     fn show_thumbnails_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let thumb_dir = crate::thumbs::thumb_dir_for_db(&self.db_path);
 
+        // ── Header ────────────────────────────────────────────────────────
         ui.horizontal(|ui| {
             ui.heading("🖼 Miniaturas");
             if ui.button("↺ Recargar").clicked() {
@@ -418,12 +453,67 @@ impl MediaIndexApp {
             return;
         }
 
-        ui.label(format!("{} miniaturas", self.thumb_entries.len()));
+        // ── Filter bar ────────────────────────────────────────────────────
+        ui.horizontal(|ui| {
+            ui.label("Tipo:");
+            for filter in [
+                ThumbFilter::All,
+                ThumbFilter::Td,
+                ThumbFilter::Video,
+                ThumbFilter::Image,
+            ] {
+                if ui
+                    .selectable_label(self.thumb_filter == filter, filter.label())
+                    .clicked()
+                {
+                    if self.thumb_filter != filter {
+                        self.thumb_filter = filter;
+                        self.thumb_selected = None;
+                    }
+                }
+            }
+
+            ui.separator();
+            ui.label("🔎");
+            let search_resp = ui.add(
+                egui::TextEdit::singleline(&mut self.thumb_search)
+                    .hint_text("buscar por nombre…")
+                    .desired_width(200.0),
+            );
+            if search_resp.changed() {
+                self.thumb_selected = None;
+            }
+            if !self.thumb_search.is_empty() && ui.small_button("✕").clicked() {
+                self.thumb_search.clear();
+                self.thumb_selected = None;
+            }
+        });
+
+        // Collect visible entries (original index, entry ref)
+        let search_lc = self.thumb_search.to_lowercase();
+        let visible: Vec<(usize, &ThumbEntry)> = self
+            .thumb_entries
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                self.thumb_filter.matches(&e.media_type)
+                    && (search_lc.is_empty()
+                        || e.name.to_lowercase().contains(&search_lc))
+            })
+            .collect();
+
+        let total_all = self.thumb_entries.len();
+        let shown = visible.len();
+        if shown == total_all {
+            ui.label(format!("{total_all} miniaturas"));
+        } else {
+            ui.label(format!("{shown} de {total_all} miniaturas"));
+        }
         ui.separator();
 
         // ── Detail panel (right) ──────────────────────────────────────────
-        if let Some(idx) = self.thumb_selected {
-            if let Some(entry) = self.thumb_entries.get(idx) {
+        if let Some(sel_idx) = self.thumb_selected {
+            if let Some(entry) = self.thumb_entries.get(sel_idx) {
                 let name = entry.name.clone();
                 let path = entry.path.clone();
                 let media_type = entry.media_type.clone();
@@ -438,7 +528,6 @@ impl MediaIndexApp {
                         ui.heading("Archivo original");
                         ui.separator();
 
-                        // Preview larger
                         let uri = format!("file://{}", thumb_path.display());
                         ui.add(
                             egui::Image::new(uri)
@@ -457,7 +546,8 @@ impl MediaIndexApp {
                                 ui.end_row();
                                 if !media_type.is_empty() {
                                     ui.label(egui::RichText::new("Tipo:").weak());
-                                    ui.label(media_type.to_uppercase());
+                                    let (badge, color) = thumb_type_badge(&media_type);
+                                    ui.colored_label(color, badge);
                                     ui.end_row();
                                 }
                             });
@@ -493,6 +583,14 @@ impl MediaIndexApp {
 
         // ── Thumbnail grid ────────────────────────────────────────────────
         egui::CentralPanel::default().show_inside(ui, |ui| {
+            if visible.is_empty() {
+                ui.add_space(30.0);
+                ui.centered_and_justified(|ui| {
+                    ui.label("No hay miniaturas que coincidan con el filtro.");
+                });
+                return;
+            }
+
             let cell = 140.0_f32;
             let label_h = 32.0_f32;
             let cols = ((ui.available_width() / (cell + 4.0)) as usize).max(1);
@@ -503,8 +601,8 @@ impl MediaIndexApp {
                     .max_col_width(cell)
                     .spacing([4.0, 4.0])
                     .show(ui, |ui| {
-                        for (i, entry) in self.thumb_entries.iter().enumerate() {
-                            let selected = self.thumb_selected == Some(i);
+                        for (grid_pos, (orig_idx, entry)) in visible.iter().enumerate() {
+                            let selected = self.thumb_selected == Some(*orig_idx);
                             let uri = format!("file://{}", entry.thumb_path.display());
                             let img = egui::Image::new(&uri)
                                 .max_size(egui::vec2(cell, cell))
@@ -515,7 +613,6 @@ impl MediaIndexApp {
                             ui.vertical(|ui| {
                                 ui.set_min_width(cell);
 
-                                // Highlight border when selected
                                 let frame = if selected {
                                     egui::Frame::default()
                                         .stroke(egui::Stroke::new(2.0, egui::Color32::from_rgb(80, 160, 255)))
@@ -530,29 +627,29 @@ impl MediaIndexApp {
 
                                 let resp = frame.show(ui, |ui| ui.add(img));
                                 if resp.inner.clicked() {
-                                    self.thumb_selected = if selected { None } else { Some(i) };
+                                    self.thumb_selected =
+                                        if selected { None } else { Some(*orig_idx) };
                                 }
 
-                                // Filename label (truncated)
-                                let display_name = if entry.name.len() > 20 {
-                                    format!("{}…", &entry.name[..18])
-                                } else {
-                                    entry.name.clone()
-                                };
-                                let label = ui.add_sized(
-                                    [cell, label_h],
-                                    egui::Label::new(
-                                        egui::RichText::new(display_name).size(11.0),
-                                    )
-                                    .truncate(),
-                                );
-                                // Tooltip with full path
-                                if !entry.path.is_empty() {
-                                    label.on_hover_text(&entry.path);
-                                }
+                                // Type badge (small, top-right corner feel via label)
+                                let (badge, color) = thumb_type_badge(&entry.media_type);
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(color, egui::RichText::new(badge).size(10.0));
+                                    let display_name = entry.name
+                                        .get(..18.min(entry.name.len()))
+                                        .map(|s| if entry.name.len() > 18 { format!("{s}…") } else { s.to_string() })
+                                        .unwrap_or_default();
+                                    ui.add_sized(
+                                        [cell - 30.0, label_h],
+                                        egui::Label::new(
+                                            egui::RichText::new(display_name).size(11.0),
+                                        )
+                                        .truncate(),
+                                    ).on_hover_text(&entry.path);
+                                });
                             });
 
-                            if (i + 1) % cols == 0 {
+                            if (grid_pos + 1) % cols == 0 {
                                 ui.end_row();
                             }
                         }
@@ -599,6 +696,17 @@ impl eframe::App for MediaIndexApp {
                 &self.result_tx,
             ),
         });
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────
+
+fn thumb_type_badge(media_type: &str) -> (&'static str, egui::Color32) {
+    match media_type {
+        "3d"    => ("[3D]",  egui::Color32::from_rgb(80, 210, 210)),
+        "video" => ("[VID]", egui::Color32::from_rgb(80, 140, 255)),
+        "image" => ("[IMG]", egui::Color32::from_rgb(255, 210, 50)),
+        _       => ("[?]",   egui::Color32::GRAY),
     }
 }
 
