@@ -1,16 +1,18 @@
 use eframe::egui;
 use humansize::{DECIMAL, format_size};
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 
 use super::TaskResult;
-use crate::models::ScanStats;
+use crate::models::{GuiProgress, ScanStats};
 
 #[derive(Default)]
 pub struct ScannerState {
     pub is_running: bool,
     pub last_stats: Option<ScanStats>,
     pub log: Vec<String>,
+    /// Live progress shared with the scanner thread (None when idle).
+    pub progress: Option<Arc<GuiProgress>>,
     // Form fields
     scan_path: String,
     verbose: bool,
@@ -63,7 +65,6 @@ pub fn show(
 
         if state.is_running {
             ui.spinner();
-            ui.label("Escaneando...");
         }
 
         if ui.button("🗑 Limpiar log").clicked() {
@@ -71,6 +72,31 @@ pub fn show(
             state.last_stats = None;
         }
     });
+
+    // ── Live progress bar ─────────────────────────────────────────────────
+    if state.is_running {
+        if let Some(ref prog) = state.progress {
+            let (done, total, current) = prog.get();
+            ui.add_space(6.0);
+            if total > 0 {
+                let fraction = done as f32 / total as f32;
+                ui.add(
+                    egui::ProgressBar::new(fraction)
+                        .text(format!("{done} / {total}"))
+                        .animate(true),
+                );
+            } else {
+                ui.add(egui::ProgressBar::new(0.0).text("Recopilando archivos…").animate(true));
+            }
+            if !current.is_empty() {
+                ui.label(
+                    egui::RichText::new(format!("↳ {current}"))
+                        .weak()
+                        .size(11.0),
+                );
+            }
+        }
+    }
 
     ui.add_space(8.0);
 
@@ -194,6 +220,9 @@ fn start_scan(
         .log
         .push(format!("Iniciando escaneo de {}...", state.scan_path));
 
+    let progress = GuiProgress::new();
+    state.progress = Some(Arc::clone(&progress));
+
     let db_path = db_path.to_string();
     let verbose = state.verbose;
     let no_archives = state.no_archives;
@@ -202,7 +231,8 @@ fn start_scan(
     std::thread::spawn(move || {
         let result = (|| -> anyhow::Result<ScanStats> {
             let db = crate::db::Database::open(&db_path)?;
-            let scanner = crate::scanner::Scanner::new(db, verbose, no_archives);
+            let mut scanner = crate::scanner::Scanner::new(db, verbose, no_archives);
+            scanner.gui_progress = Some(progress);
             scanner.scan(&path)
         })();
 

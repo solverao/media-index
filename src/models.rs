@@ -1,4 +1,39 @@
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
+
+// ── Shared GUI progress ───────────────────────────────────────────────────
+
+/// Thread-safe progress counter shared between a background worker and the UI.
+/// The UI polls it every repaint cycle (≈150 ms).
+#[derive(Default)]
+pub struct GuiProgress {
+    pub done:    AtomicUsize,
+    pub total:   AtomicUsize,
+    pub current: Mutex<String>,
+}
+
+impl GuiProgress {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// Update counters and current filename atomically.
+    pub fn update(&self, done: usize, total: usize, file: &str) {
+        self.total.store(total, Ordering::Relaxed);
+        self.done.store(done, Ordering::Relaxed);
+        if let Ok(mut g) = self.current.lock() {
+            g.clear();
+            g.push_str(file);
+        }
+    }
+
+    pub fn get(&self) -> (usize, usize, String) {
+        let done  = self.done.load(Ordering::Relaxed);
+        let total = self.total.load(Ordering::Relaxed);
+        let file  = self.current.lock().map(|g| g.clone()).unwrap_or_default();
+        (done, total, file)
+    }
+}
 
 // ── Media type ────────────────────────────────────────────────────────────
 

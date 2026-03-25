@@ -1,8 +1,9 @@
 use eframe::egui;
 use std::path::Path;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc};
 
 use super::{TaskResult, VerifyEntry, VerifyStatus};
+use crate::models::GuiProgress;
 
 #[derive(Default)]
 pub struct MaintenanceState {
@@ -10,6 +11,8 @@ pub struct MaintenanceState {
     pub thumbs_result: Option<(usize, usize, usize)>, // ok, skipped, errors
     pub clean_result: Option<usize>,
     pub archive_cache_count: Option<usize>,
+    /// Live progress for thumbnail generation (None when idle).
+    pub thumb_progress: Option<Arc<GuiProgress>>,
     // Thumbs options
     thumb_size: u32,
     thumb_quality: u8,
@@ -345,8 +348,31 @@ fn panel_thumbs(
         });
 
     ui.add_space(6.0);
-    if ui.button("▶ Generar miniaturas").clicked() {
-        run_thumbs(ctx.clone(), db_path, state, tx);
+
+    let is_generating = state.thumb_progress.is_some();
+    ui.add_enabled_ui(!is_generating, |ui| {
+        if ui.button("▶ Generar miniaturas").clicked() {
+            run_thumbs(ctx.clone(), db_path, state, tx);
+        }
+    });
+
+    // ── Live progress bar ─────────────────────────────────────────────────
+    if let Some(ref prog) = state.thumb_progress {
+        let (done, total, current) = prog.get();
+        ui.add_space(6.0);
+        if total > 0 {
+            let fraction = done as f32 / total as f32;
+            ui.add(
+                egui::ProgressBar::new(fraction)
+                    .text(format!("{done} / {total}"))
+                    .animate(true),
+            );
+        } else {
+            ui.add(egui::ProgressBar::new(0.0).text("Consultando BD…").animate(true));
+        }
+        if !current.is_empty() {
+            ui.label(egui::RichText::new(format!("↳ {current}")).weak().size(11.0));
+        }
     }
 
     if let Some((ok, skipped, errors)) = state.thumbs_result {
@@ -372,7 +398,7 @@ fn panel_thumbs(
 fn run_thumbs(
     ctx: egui::Context,
     db_path: &str,
-    state: &MaintenanceState,
+    state: &mut MaintenanceState,
     tx: &mpsc::Sender<TaskResult>,
 ) {
     use crate::thumbs::{
@@ -387,14 +413,26 @@ fn run_thumbs(
     let type_str = state.thumb_type.as_db_str();
     let tx = tx.clone();
 
+    let progress = GuiProgress::new();
+    state.thumb_progress = Some(Arc::clone(&progress));
+    state.thumbs_result = None;
+
     std::thread::spawn(move || {
         let result: anyhow::Result<(usize, usize, usize)> = (|| {
             let db = crate::db::Database::open(&db_path)?;
             let thumb_dir = thumb_dir_for_db(&db_path);
             let files = db.files_for_thumbs(type_str)?;
+            let total = files.len();
 
             let (mut ok, mut skipped, mut errors) = (0, 0, 0);
-            for (hash, path, media_type, ext) in &files {
+            for (idx, (hash, path, media_type, ext)) in files.iter().enumerate() {
+                // Update GUI progress
+                let file_name = std::path::Path::new(path)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().chars().take(45).collect::<String>())
+                    .unwrap_or_default();
+                progress.update(idx, total, &file_name);
+
                 let t_path = thumb_path(&thumb_dir, hash);
                 if t_path.exists() && !force {
                     skipped += 1;

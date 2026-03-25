@@ -22,6 +22,8 @@ pub struct Scanner {
     db: Arc<Mutex<Database>>,
     verbose: bool,
     no_archives: bool,
+    /// Optional GUI progress sink — updated from the worker threads.
+    pub gui_progress: Option<Arc<GuiProgress>>,
 }
 
 impl Scanner {
@@ -30,6 +32,7 @@ impl Scanner {
             db: Arc::new(Mutex::new(db)),
             verbose,
             no_archives,
+            gui_progress: None,
         }
     }
 
@@ -93,12 +96,27 @@ impl Scanner {
             .progress_chars("█▓░"),
         );
 
+        let gui_prog = self.gui_progress.clone();
+        let total_files = entries.len();
+        let done_counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        // Macro-like closure: increment both the indicatif bar and the GUI counter.
+        // Captures pb and done_counter by reference.
+        let tick = |pb: &ProgressBar, done_counter: &Arc<std::sync::atomic::AtomicUsize>,
+                    gui_prog: &Option<Arc<GuiProgress>>, file: &str| {
+            pb.inc(1);
+            let n = done_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if let Some(gp) = gui_prog {
+                gp.update(n, total_files, file);
+            }
+        };
+
         entries.par_iter().for_each(|path| {
-            pb.set_message(
-                path.file_name()
-                    .map(|n| n.to_string_lossy().chars().take(45).collect::<String>())
-                    .unwrap_or_default(),
-            );
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().chars().take(45).collect::<String>())
+                .unwrap_or_default();
+            pb.set_message(file_name.clone());
 
             let ext = path
                 .extension()
@@ -125,7 +143,7 @@ impl Scanner {
                         }
                     }
                 }
-                pb.inc(1);
+                tick(&pb, &done_counter, &gui_prog, &file_name);
                 return;
             }
 
@@ -139,13 +157,13 @@ impl Scanner {
                         let is_first =
                             name_lower.contains(".part1.") || name_lower.contains(".part01.");
                         if !is_first {
-                            pb.inc(1);
+                            tick(&pb, &done_counter, &gui_prog, &file_name);
                             return;
                         }
                     }
                     if archive_type == ArchiveType::SevenZip && is_7z_multipart(&name_lower) {
                         if !name_lower.ends_with(".001") {
-                            pb.inc(1);
+                            tick(&pb, &done_counter, &gui_prog, &file_name);
                             return;
                         }
                     }
@@ -171,7 +189,7 @@ impl Scanner {
                         if self.db.lock().unwrap().is_archive_cached(&archive_path_str, mtime, size) {
                             let mut s = stats.lock().unwrap();
                             s.skipped_cached += 1;
-                            pb.inc(1);
+                            tick(&pb, &done_counter, &gui_prog, &file_name);
                             return;
                         }
                     }
@@ -235,7 +253,7 @@ impl Scanner {
                 }
             }
 
-            pb.inc(1);
+            tick(&pb, &done_counter, &gui_prog, &file_name);
         });
 
         pb.finish_with_message("done");

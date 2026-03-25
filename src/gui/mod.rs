@@ -264,6 +264,7 @@ impl MediaIndexApp {
                 }
                 TaskResult::ScanComplete(s) => {
                     self.scanner.is_running = false;
+                    self.scanner.progress = None;
                     self.scanner.last_stats = Some(s);
                     self.scanner.log.push("Scan complete.".into());
                 }
@@ -297,6 +298,7 @@ impl MediaIndexApp {
                     skipped,
                     errors,
                 } => {
+                    self.maintenance.thumb_progress = None;
                     self.maintenance.thumbs_result = Some((ok, skipped, errors));
                 }
                 TaskResult::ThumbsLoaded(entries) => {
@@ -565,7 +567,7 @@ impl eframe::App for MediaIndexApp {
         self.process_results();
 
         // Keep repainting while a background task is running
-        if self.is_loading || self.scanner.is_running {
+        if self.is_loading || self.scanner.is_running || self.maintenance.thumb_progress.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(150));
         }
 
