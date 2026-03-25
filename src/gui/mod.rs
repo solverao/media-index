@@ -85,6 +85,8 @@ pub enum TaskResult {
     },
     ThumbsLoaded(Vec<ThumbEntry>),
     CleanDone(usize),
+    ArchiveCacheCount(usize),
+    ArchiveCacheCleared(usize),
     Error(String),
     Info(String),
 }
@@ -302,6 +304,13 @@ impl MediaIndexApp {
                     self.thumb_selected = None;
                 }
                 TaskResult::CleanDone(n) => {
+                    self.maintenance.clean_result = Some(n);
+                }
+                TaskResult::ArchiveCacheCount(n) => {
+                    self.maintenance.archive_cache_count = Some(n);
+                }
+                TaskResult::ArchiveCacheCleared(n) => {
+                    self.maintenance.archive_cache_count = Some(0);
                     self.maintenance.clean_result = Some(n);
                 }
                 TaskResult::Error(e) => {

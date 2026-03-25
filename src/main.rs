@@ -1282,7 +1282,7 @@ fn cmd_thumbs(
             let inner_name = parts.next().unwrap_or("");
 
             // Extract the file's bytes from the archive
-            let bytes_result = extract_entry_bytes(archive_path, inner_name);
+            let bytes_result = crate::archive::extract_entry_bytes(archive_path, inner_name);
 
             match bytes_result {
                 Err(e) => Err(e),
@@ -1361,112 +1361,6 @@ fn cmd_thumbs(
 
 /// Extracts the bytes of a specific file from inside an archive.
 /// Supports .zip, .7z and .rar (same as archive.rs).
-fn extract_entry_bytes(archive_path: &str, inner_name: &str) -> anyhow::Result<Vec<u8>> {
-    use crate::models::ArchiveType;
-    use std::path::Path;
-
-    let arc_path = Path::new(archive_path);
-    let arc_type = ArchiveType::from_path(arc_path)
-        .ok_or_else(|| anyhow::anyhow!("Unsupported archive format: {archive_path}"))?;
-
-    match arc_type {
-        ArchiveType::Zip => {
-            let file = std::fs::File::open(arc_path)?;
-            let mut zip = zip::ZipArchive::new(file)?;
-
-            // First look for exact name; otherwise search by base filename
-            let idx = if zip.by_name(inner_name).is_ok() {
-                // by_name with is_ok does not keep the borrow — find the real index
-                (0..zip.len()).find(|&i| {
-                    zip.by_index(i)
-                        .ok()
-                        .map(|e| e.name() == inner_name)
-                        .unwrap_or(false)
-                })
-            } else {
-                let base = std::path::Path::new(inner_name)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                (0..zip.len()).find(|&i| {
-                    zip.by_index(i)
-                        .ok()
-                        .map(|e| e.name().ends_with(&*base))
-                        .unwrap_or(false)
-                })
-            }
-            .ok_or_else(|| anyhow::anyhow!("{inner_name} not found in {archive_path}"))?;
-
-            let mut entry = zip.by_index(idx)?;
-            let mut data = Vec::with_capacity(entry.size() as usize);
-            std::io::copy(&mut entry, &mut data)?;
-            Ok(data)
-        }
-        ArchiveType::SevenZip => {
-            use sevenz_rust::SevenZReader;
-            let mut archive = SevenZReader::open(arc_path, sevenz_rust::Password::empty())?;
-            let mut found = None;
-            archive.for_each_entries(|entry, reader| {
-                if entry.name() == inner_name
-                    || entry.name().ends_with(&format!("/{inner_name}"))
-                    || entry.name().ends_with(&format!("\\{inner_name}"))
-                {
-                    let mut data = Vec::new();
-                    let _ = std::io::copy(reader, &mut data);
-                    found = Some(data);
-                    return Ok(false); // stop iteration
-                }
-                Ok(true)
-            })?;
-            found.ok_or_else(|| anyhow::anyhow!("{inner_name} not found in {archive_path}"))
-        }
-        ArchiveType::Rar => {
-            // For RAR we extract everything to temp and read the target file
-            use std::process::Command;
-            let path_hash = {
-                use std::hash::{Hash, Hasher};
-                let mut h = std::collections::hash_map::DefaultHasher::new();
-                archive_path.hash(&mut h);
-                h.finish()
-            };
-            let tmp = std::env::temp_dir().join(format!(
-                "media_idx_rar_{}_{:016x}",
-                std::path::Path::new(archive_path)
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "tmp".into()),
-                path_hash,
-            ));
-            std::fs::create_dir_all(&tmp)?;
-            Command::new("unrar")
-                .args(["x", "-y", "-inul", archive_path])
-                .arg(&tmp)
-                .status()?;
-            // Find the file in the temp directory
-            let target = walkdir::WalkDir::new(&tmp)
-                .into_iter()
-                .flatten()
-                .find(|e| {
-                    e.file_type().is_file() && {
-                        let name = e.file_name().to_string_lossy();
-                        let inner_base = Path::new(inner_name)
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default();
-                        name == inner_base.as_str()
-                    }
-                })
-                .map(|e| e.path().to_path_buf());
-            let result = match &target {
-                Some(p) => std::fs::read(p).map_err(|e| anyhow::anyhow!(e)),
-                None => Err(anyhow::anyhow!("{inner_name} not found in {archive_path}")),
-            };
-            let _ = std::fs::remove_dir_all(&tmp);
-            result
-        }
-    }
-}
-
 fn cmd_clean(db: Database, macos_junk: bool) -> Result<()> {
     if !macos_junk {
         println!("{}", "Specify what to clean. Available options:".yellow());

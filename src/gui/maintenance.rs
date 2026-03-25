@@ -9,6 +9,7 @@ pub struct MaintenanceState {
     pub verify_results: Vec<VerifyEntry>,
     pub thumbs_result: Option<(usize, usize, usize)>, // ok, skipped, errors
     pub clean_result: Option<usize>,
+    pub archive_cache_count: Option<usize>,
     // Thumbs options
     thumb_size: u32,
     thumb_quality: u8,
@@ -375,7 +376,8 @@ fn run_thumbs(
     tx: &mpsc::Sender<TaskResult>,
 ) {
     use crate::thumbs::{
-        generate_3d, generate_image, generate_video, thumb_dir_for_db, thumb_path,
+        generate_3d, generate_image, generate_image_from_bytes, generate_video,
+        generate_video_from_archive, thumb_dir_for_db, thumb_path,
     };
 
     let db_path = db_path.to_string();
@@ -398,18 +400,44 @@ fn run_thumbs(
                     skipped += 1;
                     continue;
                 }
-                let res = match media_type.as_str() {
-                    "image" => generate_image(path, hash, &thumb_dir, size, quality),
-                    "video" => generate_video(path, hash, &thumb_dir, size, quality),
-                    "3d" => match std::fs::read(path) {
-                        Ok(data) => generate_3d(&data, ext, hash, &thumb_dir, size, quality),
-                        Err(e) => Err(anyhow::anyhow!("{e}")),
-                    },
-                    _ => {
-                        skipped += 1;
-                        continue;
+
+                let res = if path.contains("::") {
+                    // File inside archive: extract bytes first
+                    let mut parts = path.splitn(2, "::");
+                    let archive_path = parts.next().unwrap_or("");
+                    let inner_name = parts.next().unwrap_or("");
+                    match crate::archive::extract_entry_bytes(archive_path, inner_name) {
+                        Err(e) => Err(e),
+                        Ok(data) => match media_type.as_str() {
+                            "image" => {
+                                generate_image_from_bytes(&data, hash, &thumb_dir, size, quality)
+                            }
+                            "video" => {
+                                generate_video_from_archive(&data, ext, hash, &thumb_dir, size, quality)
+                            }
+                            "3d" => generate_3d(&data, ext, hash, &thumb_dir, size, quality),
+                            _ => {
+                                skipped += 1;
+                                continue;
+                            }
+                        },
+                    }
+                } else {
+                    // Loose file on disk
+                    match media_type.as_str() {
+                        "image" => generate_image(path, hash, &thumb_dir, size, quality),
+                        "video" => generate_video(path, hash, &thumb_dir, size, quality),
+                        "3d" => match std::fs::read(path) {
+                            Ok(data) => generate_3d(&data, ext, hash, &thumb_dir, size, quality),
+                            Err(e) => Err(anyhow::anyhow!("{e}")),
+                        },
+                        _ => {
+                            skipped += 1;
+                            continue;
+                        }
                     }
                 };
+
                 if res.is_ok() {
                     ok += 1;
                 } else {
@@ -461,6 +489,32 @@ fn panel_clean(
         }
     });
 
+    ui.add_space(8.0);
+
+    ui.group(|ui| {
+        ui.label(egui::RichText::new("Caché de archivos comprimidos").strong());
+        ui.label("Evita re-escanear archivos .zip/.rar/.7z que no han cambiado.");
+
+        ui.horizontal(|ui| {
+            match state.archive_cache_count {
+                None => {
+                    if ui.button("🔍 Consultar caché").clicked() {
+                        run_count_archive_cache(ctx.clone(), db_path, tx);
+                    }
+                }
+                Some(n) => {
+                    ui.label(format!("{n} archivo(s) comprimido(s) en caché"));
+                    if ui.button("🗑 Vaciar caché").clicked() {
+                        run_clear_archive_cache(ctx.clone(), db_path, tx);
+                    }
+                    if ui.button("↺ Actualizar").clicked() {
+                        run_count_archive_cache(ctx.clone(), db_path, tx);
+                    }
+                }
+            }
+        });
+    });
+
     if let Some(n) = state.clean_result {
         ui.add_space(8.0);
         ui.colored_label(
@@ -490,6 +544,32 @@ fn run_purge_macos(ctx: egui::Context, db_path: &str, tx: &mpsc::Sender<TaskResu
         let result = crate::db::Database::open(&db_path)
             .and_then(|db| db.purge_macos_junk())
             .map(TaskResult::CleanDone)
+            .unwrap_or_else(|e| TaskResult::Error(e.to_string()));
+        let _ = tx.send(result);
+        ctx.request_repaint();
+    });
+}
+
+fn run_count_archive_cache(ctx: egui::Context, db_path: &str, tx: &mpsc::Sender<TaskResult>) {
+    let db_path = db_path.to_string();
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+        let result = crate::db::Database::open(&db_path)
+            .and_then(|db| db.count_cached_archives())
+            .map(TaskResult::ArchiveCacheCount)
+            .unwrap_or_else(|e| TaskResult::Error(e.to_string()));
+        let _ = tx.send(result);
+        ctx.request_repaint();
+    });
+}
+
+fn run_clear_archive_cache(ctx: egui::Context, db_path: &str, tx: &mpsc::Sender<TaskResult>) {
+    let db_path = db_path.to_string();
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+        let result = crate::db::Database::open(&db_path)
+            .and_then(|db| db.clear_archive_cache())
+            .map(TaskResult::ArchiveCacheCleared)
             .unwrap_or_else(|e| TaskResult::Error(e.to_string()));
         let _ = tx.send(result);
         ctx.request_repaint();

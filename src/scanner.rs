@@ -151,8 +151,10 @@ impl Scanner {
                     }
 
                     // ── Archive incremental cache ─────────────────────────
-                    // If the archive file has not changed (mtime + size match),
-                    // all its contents are already in the DB — skip extraction.
+                    // For single-part archives: mtime+size of the file itself.
+                    // For multi-part archives: mtime+size of part-1 PLUS the
+                    // combined size of all sibling parts — so that a change in
+                    // any part invalidates the cache entry.
                     let archive_path_str = path.to_string_lossy().to_string();
                     let arch_meta = std::fs::metadata(path).ok();
                     let arch_mtime = arch_meta
@@ -160,7 +162,10 @@ impl Scanner {
                         .and_then(|m| m.modified().ok())
                         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                         .map(|d| d.as_secs());
-                    let arch_size = arch_meta.as_ref().map(|m| m.len());
+                    let part1_size = arch_meta.as_ref().map(|m| m.len());
+                    let arch_size = part1_size.map(|s| {
+                        s + multipart_siblings_size(path, &archive_type, &name_lower)
+                    });
 
                     if let (Some(mtime), Some(size)) = (arch_mtime, arch_size) {
                         if self.db.lock().unwrap().is_archive_cached(&archive_path_str, mtime, size) {
@@ -398,7 +403,9 @@ impl Scanner {
                     .and_then(|m| m.modified().ok())
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                     .map(|d| d.as_secs());
-                let arch_size = arch_meta.as_ref().map(|m| m.len());
+                let arch_size = arch_meta.as_ref().map(|m| m.len()).map(|s| {
+                    s + multipart_siblings_size(path, &archive_type, &name_lower)
+                });
 
                 if let (Some(mtime), Some(size)) = (arch_mtime, arch_size) {
                     if self.db.lock().unwrap().is_archive_cached(&archive_path_str, mtime, size) {
@@ -487,6 +494,71 @@ fn build_entry_from_memory(
         path_in_archive: Some(name.to_string()),
         mtime: None,
         from_cache: false,
+    }
+}
+
+/// Returns the combined size (bytes) of all sibling parts of a multi-part
+/// archive, excluding the first part (whose size is already counted by the
+/// caller). Returns 0 for single-part archives.
+///
+/// For RAR: `archive.part1.rar` → sums `archive.part2.rar`, `.part3.rar`, …
+/// For 7z:  `archive.7z.001`   → sums `archive.7z.002`, `.003`, …
+fn multipart_siblings_size(first_part: &Path, archive_type: &ArchiveType, name_lower: &str) -> u64 {
+    let dir = match first_part.parent() {
+        Some(d) => d,
+        None => return 0,
+    };
+
+    match archive_type {
+        ArchiveType::Rar if is_rar_multipart(name_lower) => {
+            // Stem before ".partN.rar": "backup.part1.rar" → stem "backup"
+            let stem = name_lower
+                .rfind(".part")
+                .map(|i| &name_lower[..i])
+                .unwrap_or("");
+            if stem.is_empty() {
+                return 0;
+            }
+            let mut total = 0u64;
+            if let Ok(rd) = std::fs::read_dir(dir) {
+                for entry in rd.flatten() {
+                    let sibling = entry.file_name().to_string_lossy().to_lowercase();
+                    if sibling == *name_lower {
+                        continue; // skip first part itself
+                    }
+                    if sibling.starts_with(stem)
+                        && sibling.ends_with(".rar")
+                        && is_rar_multipart(&sibling)
+                    {
+                        total += entry.metadata().map(|m| m.len()).unwrap_or(0);
+                    }
+                }
+            }
+            total
+        }
+        ArchiveType::SevenZip if is_7z_multipart(name_lower) => {
+            // Stem before ".001": "backup.7z.001" → prefix "backup.7z."
+            let prefix = name_lower
+                .strip_suffix("001")
+                .unwrap_or("");
+            if prefix.is_empty() {
+                return 0;
+            }
+            let mut total = 0u64;
+            if let Ok(rd) = std::fs::read_dir(dir) {
+                for entry in rd.flatten() {
+                    let sibling = entry.file_name().to_string_lossy().to_lowercase();
+                    if sibling == *name_lower {
+                        continue;
+                    }
+                    if sibling.starts_with(prefix) && is_7z_multipart(&sibling) {
+                        total += entry.metadata().map(|m| m.len()).unwrap_or(0);
+                    }
+                }
+            }
+            total
+        }
+        _ => 0,
     }
 }
 

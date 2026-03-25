@@ -396,6 +396,22 @@ impl Database {
         Ok(())
     }
 
+    /// Returns the number of archives currently in the cache.
+    pub fn count_cached_archives(&self) -> Result<usize> {
+        let n: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM processed_archives", [], |r| r.get(0))?;
+        Ok(n as usize)
+    }
+
+    /// Removes all entries from the processed_archives cache.
+    pub fn clear_archive_cache(&self) -> Result<usize> {
+        let n = self
+            .conn
+            .execute("DELETE FROM processed_archives", [])?;
+        Ok(n)
+    }
+
     // ── Maintenance ───────────────────────────────────────────────────────
 
     /// Removes entries whose path no longer exists on disk, including those
