@@ -104,6 +104,16 @@ impl Database {
                 UNIQUE(canonical_id, duplicate_path)
             );
 
+            -- Cache of fully-processed archives: mtime+size guard identical to
+            -- the incremental cache used for plain files.  If the archive file has
+            -- not changed since the last scan, all its contents are already in the
+            -- `files` table and extraction can be skipped entirely.
+            CREATE TABLE IF NOT EXISTS processed_archives (
+                path  TEXT    NOT NULL PRIMARY KEY,
+                mtime INTEGER NOT NULL,
+                size  INTEGER NOT NULL
+            );
+
             -- Indexes
             CREATE INDEX IF NOT EXISTS idx_files_hash      ON files(blake3_hash);
             CREATE INDEX IF NOT EXISTS idx_files_type      ON files(media_type);
@@ -115,6 +125,15 @@ impl Database {
             CREATE INDEX IF NOT EXISTS idx_image_phash     ON meta_image(phash);
         ",
         )?;
+
+        // Migration for existing DBs: create processed_archives table if absent.
+        let _ = self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS processed_archives (
+                path  TEXT    NOT NULL PRIMARY KEY,
+                mtime INTEGER NOT NULL,
+                size  INTEGER NOT NULL
+            );",
+        );
 
         // Migration for existing DBs: add phash if the column does not exist.
         // ALTER TABLE fails silently if the column already exists.
@@ -352,6 +371,31 @@ impl Database {
         Ok(())
     }
 
+    // ── Archive cache ─────────────────────────────────────────────────────
+
+    /// Returns true if the archive was already fully processed with the same
+    /// mtime and size, meaning its contents are already in `files`.
+    pub fn is_archive_cached(&self, path: &str, mtime: u64, size: u64) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM processed_archives WHERE path = ?1 AND mtime = ?2 AND size = ?3",
+                params![path, mtime as i64, size as i64],
+                |_| Ok(()),
+            )
+            .is_ok()
+    }
+
+    /// Records that an archive was fully processed with the given mtime and size.
+    pub fn mark_archive_processed(&self, path: &str, mtime: u64, size: u64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO processed_archives (path, mtime, size)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(path) DO UPDATE SET mtime = excluded.mtime, size = excluded.size",
+            params![path, mtime as i64, size as i64],
+        )?;
+        Ok(())
+    }
+
     // ── Maintenance ───────────────────────────────────────────────────────
 
     /// Removes entries whose path no longer exists on disk, including those
@@ -413,6 +457,22 @@ impl Database {
                 self.conn
                     .execute("DELETE FROM files WHERE id = ?1", rusqlite::params![id])?;
                 files_removed += 1;
+            }
+        }
+
+        // 3. processed_archives entries whose archive file no longer exists
+        let archive_paths: Vec<String> = {
+            let mut stmt = self.conn.prepare("SELECT path FROM processed_archives")?;
+            stmt.query_map([], |r| r.get(0))?
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        for path in &archive_paths {
+            if !std::path::Path::new(path).exists() {
+                self.conn.execute(
+                    "DELETE FROM processed_archives WHERE path = ?1",
+                    rusqlite::params![path],
+                )?;
             }
         }
 

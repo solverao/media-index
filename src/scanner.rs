@@ -150,6 +150,27 @@ impl Scanner {
                         }
                     }
 
+                    // ── Archive incremental cache ─────────────────────────
+                    // If the archive file has not changed (mtime + size match),
+                    // all its contents are already in the DB — skip extraction.
+                    let archive_path_str = path.to_string_lossy().to_string();
+                    let arch_meta = std::fs::metadata(path).ok();
+                    let arch_mtime = arch_meta
+                        .as_ref()
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs());
+                    let arch_size = arch_meta.as_ref().map(|m| m.len());
+
+                    if let (Some(mtime), Some(size)) = (arch_mtime, arch_size) {
+                        if self.db.lock().unwrap().is_archive_cached(&archive_path_str, mtime, size) {
+                            let mut s = stats.lock().unwrap();
+                            s.skipped_cached += 1;
+                            pb.inc(1);
+                            return;
+                        }
+                    }
+
                     // Heavy work WITHOUT lock: extract + build entries
                     match extract_media_files(path, &archive_type) {
                         Ok(files) => {
@@ -168,11 +189,15 @@ impl Scanner {
                                 })
                                 .collect();
 
-                            // Brief lock: insert the whole batch
+                            // Brief lock: insert the whole batch and record cache
                             let mut s = stats.lock().unwrap();
                             s.archives_opened += 1;
                             for entry in built {
                                 self.insert_entry(entry, &mut s);
+                            }
+                            if let (Some(mtime), Some(size)) = (arch_mtime, arch_size) {
+                                let _ = self.db.lock().unwrap()
+                                    .mark_archive_processed(&archive_path_str, mtime, size);
                             }
                         }
                         Err(e) => {
@@ -366,6 +391,21 @@ impl Scanner {
                     }
                 }
 
+                let archive_path_str = path.to_string_lossy().to_string();
+                let arch_meta = std::fs::metadata(path).ok();
+                let arch_mtime = arch_meta
+                    .as_ref()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs());
+                let arch_size = arch_meta.as_ref().map(|m| m.len());
+
+                if let (Some(mtime), Some(size)) = (arch_mtime, arch_size) {
+                    if self.db.lock().unwrap().is_archive_cached(&archive_path_str, mtime, size) {
+                        return;
+                    }
+                }
+
                 match extract_media_files(path, &archive_type) {
                     Ok(files) => {
                         let built: Vec<MediaEntry> = files
@@ -386,6 +426,10 @@ impl Scanner {
                         let mut dummy = ScanStats::default();
                         for entry in built {
                             self.insert_entry(entry, &mut dummy);
+                        }
+                        if let (Some(mtime), Some(size)) = (arch_mtime, arch_size) {
+                            let _ = self.db.lock().unwrap()
+                                .mark_archive_processed(&archive_path_str, mtime, size);
                         }
                     }
                     Err(e) if self.verbose => {
