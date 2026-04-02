@@ -138,32 +138,87 @@ pub fn show(
 
     // ── Delete controls ───────────────────────────────────────────────────
     if !state.selected_dupes.is_empty() {
-        ui.horizontal(|ui| {
-            ui.checkbox(&mut state.dry_run, "Simulación (dry-run)");
-            if !state.confirm_delete {
-                if ui
-                    .add(
-                        egui::Button::new("🗑 Eliminar seleccionados")
-                            .fill(egui::Color32::from_rgb(180, 40, 40)),
+        // Snapshot immutable values for use in frame fill computation
+        let dry_run = state.dry_run;
+        let confirm_delete = state.confirm_delete;
+
+        let frame_fill = if dry_run {
+            egui::Color32::from_rgba_unmultiplied(0, 60, 0, 80)
+        } else {
+            egui::Color32::from_rgba_unmultiplied(80, 0, 0, 100)
+        };
+
+        egui::Frame::default()
+            .fill(frame_fill)
+            .rounding(egui::Rounding::same(6.0))
+            .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+            .show(ui, |ui: &mut egui::Ui| {
+                // Mode banner
+                let (mode_color, mode_label) = if dry_run {
+                    (
+                        egui::Color32::from_rgb(80, 200, 80),
+                        "🔵 SIMULACIÓN — no se borrará nada",
                     )
-                    .clicked()
-                {
-                    state.confirm_delete = true;
+                } else {
+                    (
+                        egui::Color32::from_rgb(255, 80, 80),
+                        "🔴 MODO REAL — ¡los archivos se borrarán del disco!",
+                    )
+                };
+                ui.horizontal(|ui: &mut egui::Ui| {
+                    ui.colored_label(mode_color, mode_label);
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui: &mut egui::Ui| {
+                            ui.checkbox(&mut state.dry_run, "Simulación");
+                        },
+                    );
+                });
+
+                ui.add_space(4.0);
+
+                if !confirm_delete {
+                    ui.horizontal(|ui: &mut egui::Ui| {
+                        let (btn_color, btn_label) = if dry_run {
+                            (egui::Color32::from_rgb(40, 120, 40), "▶ Simular eliminación")
+                        } else {
+                            (egui::Color32::from_rgb(180, 40, 40), "🗑 Eliminar seleccionados")
+                        };
+                        if ui.add(egui::Button::new(btn_label).fill(btn_color)).clicked() {
+                            state.confirm_delete = true;
+                        }
+                        if ui.small_button("✗ Deseleccionar todo").clicked() {
+                            state.selected_dupes.clear();
+                        }
+                    });
+                } else {
+                    let confirm_question = if dry_run {
+                        "¿Ejecutar simulación con los archivos seleccionados?"
+                    } else {
+                        "⚠ ¿Borrar permanentemente los archivos seleccionados del disco?"
+                    };
+                    ui.colored_label(egui::Color32::from_rgb(255, 200, 50), confirm_question);
+                    ui.add_space(2.0);
+                    ui.horizontal(|ui: &mut egui::Ui| {
+                        let confirm_color = if dry_run {
+                            egui::Color32::from_rgb(40, 140, 40)
+                        } else {
+                            egui::Color32::from_rgb(200, 50, 50)
+                        };
+                        if ui
+                            .add(egui::Button::new("✓ Sí, confirmar").fill(confirm_color))
+                            .clicked()
+                        {
+                            delete_selected(state, ctx.clone(), db_path, tx);
+                            state.confirm_delete = false;
+                        }
+                        if ui.button("✗ Cancelar").clicked() {
+                            state.confirm_delete = false;
+                        }
+                    });
                 }
-            } else {
-                ui.colored_label(
-                    egui::Color32::from_rgb(255, 90, 90),
-                    "¿Confirmar eliminación?",
-                );
-                if ui.button("✓ Sí, eliminar").clicked() {
-                    delete_selected(state, ctx.clone(), db_path, tx);
-                    state.confirm_delete = false;
-                }
-                if ui.button("✗ Cancelar").clicked() {
-                    state.confirm_delete = false;
-                }
-            }
-        });
+            });
+        ui.add_space(4.0);
         ui.separator();
     }
 
@@ -231,19 +286,48 @@ fn show_group(
                         let in_archive = d.contains("::");
                         let is_sel = selected.contains(d);
 
-                        ui.label(if in_archive {
-                            egui::RichText::new("⊡ Archivo")
-                                .color(egui::Color32::from_rgb(200, 160, 50))
+                        // Highlight selected rows with a subtle red tint
+                        if is_sel {
+                            ui.label(
+                                egui::RichText::new("🗑 A borrar")
+                                    .color(egui::Color32::from_rgb(255, 110, 110))
+                                    .strong(),
+                            );
+                        } else if in_archive {
+                            ui.label(
+                                egui::RichText::new("⊡ Archivo")
+                                    .color(egui::Color32::from_rgb(200, 160, 50)),
+                            );
                         } else {
-                            egui::RichText::new("↳ Copia")
-                                .color(egui::Color32::from_rgb(255, 90, 90))
-                        });
+                            ui.label(
+                                egui::RichText::new("↳ Copia")
+                                    .color(egui::Color32::from_rgb(180, 180, 180)),
+                            );
+                        }
 
-                        ui.label(egui::RichText::new(d).weak());
+                        let path_text = if is_sel {
+                            egui::RichText::new(d)
+                                .color(egui::Color32::from_rgb(255, 150, 150))
+                                .strikethrough()
+                        } else {
+                            egui::RichText::new(d).weak()
+                        };
+                        ui.label(path_text);
 
                         if !in_archive {
-                            let chk_label = if is_sel { "☑ Marcar" } else { "☐ Marcar" };
-                            if ui.small_button(chk_label).clicked() {
+                            let (chk_label, btn_color) = if is_sel {
+                                ("☑ Desmarcar", egui::Color32::from_rgb(120, 60, 60))
+                            } else {
+                                ("☐ Marcar", egui::Color32::from_rgb(60, 60, 80))
+                            };
+                            if ui
+                                .add(
+                                    egui::Button::new(chk_label)
+                                        .fill(btn_color)
+                                        .small(),
+                                )
+                                .clicked()
+                            {
                                 if is_sel {
                                     selected.remove(d);
                                 } else {
