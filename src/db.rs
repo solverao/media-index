@@ -1156,6 +1156,96 @@ impl Database {
             .collect())
     }
 
+    // ── CSV export ───────────────────────────────────────────────────────
+
+    /// Exports all indexed files to a CSV file at `output_path`.
+    /// Columns: name, path, type, extension, size_bytes, duration_secs,
+    ///          width, height, artist, title, album, year, camera_model,
+    ///          triangle_count, is_duplicate, indexed_at
+    pub fn export_csv(&self, output_path: &std::path::Path) -> Result<usize> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.original_name, f.current_path, f.media_type, f.extension,
+                    f.size_bytes, f.indexed_at,
+                    COALESCE(a.duration_secs, v.duration_secs)        AS duration_secs,
+                    COALESCE(i.width,  v.width)                        AS width,
+                    COALESCE(i.height, v.height)                       AS height,
+                    a.artist, COALESCE(a.title, v.title)               AS title,
+                    a.album,  COALESCE(a.year,  v.year)                AS year,
+                    i.camera_model,
+                    d3.triangle_count,
+                    CASE WHEN dup.duplicate_path IS NOT NULL THEN 1 ELSE 0 END AS is_duplicate
+             FROM files f
+             LEFT JOIN meta_audio a  ON a.file_id  = f.id
+             LEFT JOIN meta_video v  ON v.file_id  = f.id
+             LEFT JOIN meta_image i  ON i.file_id  = f.id
+             LEFT JOIN meta_3d   d3  ON d3.file_id = f.id
+             LEFT JOIN duplicates dup ON dup.duplicate_path = f.current_path
+             ORDER BY f.media_type, f.original_name",
+        )?;
+
+        let file = std::fs::File::create(output_path)?;
+        let mut w = std::io::BufWriter::new(file);
+        use std::io::Write;
+
+        writeln!(
+            w,
+            "name,path,type,extension,size_bytes,duration_secs,width,height,\
+             artist,title,album,year,camera_model,triangle_count,is_duplicate,indexed_at"
+        )?;
+
+        let mut count = 0usize;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,   // name
+                r.get::<_, String>(1)?,   // path
+                r.get::<_, String>(2)?,   // type
+                r.get::<_, String>(3)?,   // extension
+                r.get::<_, i64>(4)?,      // size_bytes
+                r.get::<_, String>(5)?,   // indexed_at
+                r.get::<_, Option<f64>>(6)?,  // duration_secs
+                r.get::<_, Option<i64>>(7)?,  // width
+                r.get::<_, Option<i64>>(8)?,  // height
+                r.get::<_, Option<String>>(9)?,  // artist
+                r.get::<_, Option<String>>(10)?, // title
+                r.get::<_, Option<String>>(11)?, // album
+                r.get::<_, Option<i64>>(12)?,    // year
+                r.get::<_, Option<String>>(13)?, // camera_model
+                r.get::<_, Option<i64>>(14)?,    // triangle_count
+                r.get::<_, i64>(15)?,            // is_duplicate
+            ))
+        })?;
+
+        for row in rows.filter_map(ok_or_log) {
+            let (name, path, typ, ext, size, indexed_at,
+                 dur, width, height, artist, title, album, year,
+                 camera, triangles, is_dup) = row;
+
+            writeln!(
+                w,
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                csv_field(&name),
+                csv_field(&path),
+                csv_field(&typ),
+                csv_field(&ext),
+                size,
+                csv_field(&indexed_at),
+                opt_f64(dur),
+                opt_i64(width),
+                opt_i64(height),
+                csv_opt_str(artist.as_deref()),
+                csv_opt_str(title.as_deref()),
+                csv_opt_str(album.as_deref()),
+                opt_i64(year),
+                csv_opt_str(camera.as_deref()),
+                opt_i64(triangles),
+                is_dup,
+            )?;
+            count += 1;
+        }
+
+        Ok(count)
+    }
+
     // ── Scan history ──────────────────────────────────────────────────────
 
     pub fn insert_scan_history(
@@ -1693,3 +1783,27 @@ fn copy_score(path: &str) -> u32 {
 
     score
 }
+
+// ── CSV helpers ───────────────────────────────────────────────────────────
+
+/// Wraps a string field in double-quotes and escapes internal quotes.
+fn csv_field(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+fn csv_opt_str(v: Option<&str>) -> String {
+    v.map(csv_field).unwrap_or_default()
+}
+
+fn opt_f64(v: Option<f64>) -> String {
+    v.map(|x| format!("{x:.3}")).unwrap_or_default()
+}
+
+fn opt_i64(v: Option<i64>) -> String {
+    v.map(|x| x.to_string()).unwrap_or_default()
+}
+

@@ -22,6 +22,8 @@ pub struct MaintenanceState {
     panel: MainPanel,
     // Verify prune option
     verify_prune: bool,
+    // Export
+    export_path: String,
 }
 
 impl MaintenanceState {
@@ -40,6 +42,7 @@ enum MainPanel {
     Verify,
     Thumbs,
     Clean,
+    Export,
     Doctor,
     Empty,
 }
@@ -93,6 +96,7 @@ pub fn show(
             (MainPanel::Verify, "✔", "Verificar"),
             (MainPanel::Thumbs, "🖼", "Miniaturas"),
             (MainPanel::Clean, "🧹", "Limpiar BD"),
+            (MainPanel::Export, "⬇", "Exportar"),
             (MainPanel::Doctor, "💊", "Doctor"),
             (MainPanel::Empty, "🗑", "Vacíos/Rotos"),
         ] {
@@ -109,6 +113,7 @@ pub fn show(
         MainPanel::Verify => panel_verify(ui, state, ctx, db_path, tx),
         MainPanel::Thumbs => panel_thumbs(ui, state, ctx, db_path, tx),
         MainPanel::Clean => panel_clean(ui, state, ctx, db_path, tx),
+        MainPanel::Export => panel_export(ui, state, ctx, db_path, tx),
         MainPanel::Doctor => panel_doctor(ui),
         MainPanel::Empty => panel_empty(ui, db_path),
     }
@@ -493,6 +498,81 @@ fn run_thumbs(
             })
             .unwrap_or_else(|e| TaskResult::Error(e.to_string()));
         let _ = tx.send(msg);
+        ctx.request_repaint();
+    });
+}
+
+// ── Export ────────────────────────────────────────────────────────────────
+
+fn panel_export(
+    ui: &mut egui::Ui,
+    state: &mut MaintenanceState,
+    ctx: &egui::Context,
+    db_path: &str,
+    tx: &mpsc::Sender<TaskResult>,
+) {
+    ui.label("Exporta el índice completo a un archivo externo.");
+    ui.add_space(8.0);
+
+    // ── CSV ───────────────────────────────────────────────────────────────
+    ui.group(|ui: &mut egui::Ui| {
+        ui.label(egui::RichText::new("Exportar a CSV").strong());
+        ui.label(
+            "Genera un archivo .csv con todos los archivos indexados \
+             y sus metadatos (nombre, ruta, tipo, tamaño, duración, dimensiones, \
+             artista, cámara, etc.).",
+        );
+        ui.add_space(6.0);
+
+        ui.horizontal(|ui: &mut egui::Ui| {
+            ui.label("Ruta de salida:");
+            ui.add(
+                egui::TextEdit::singleline(&mut state.export_path)
+                    .hint_text("media_export.csv")
+                    .desired_width(300.0),
+            );
+        });
+
+        ui.add_space(4.0);
+
+        let out_path = if state.export_path.trim().is_empty() {
+            // Default: same directory as the DB
+            std::path::Path::new(db_path)
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .join("media_export.csv")
+                .to_string_lossy()
+                .to_string()
+        } else {
+            state.export_path.trim().to_string()
+        };
+
+        ui.label(
+            egui::RichText::new(format!("→ {out_path}")).weak().italics(),
+        );
+        ui.add_space(4.0);
+
+        if ui.button("⬇ Exportar CSV").clicked() {
+            run_export_csv(ctx.clone(), db_path, &out_path, tx);
+        }
+    });
+}
+
+fn run_export_csv(
+    ctx: egui::Context,
+    db_path: &str,
+    output: &str,
+    tx: &mpsc::Sender<TaskResult>,
+) {
+    let db_path = db_path.to_string();
+    let output = output.to_string();
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+        let result = crate::db::Database::open(&db_path)
+            .and_then(|db| db.export_csv(std::path::Path::new(&output)))
+            .map(|count| TaskResult::CsvExported { path: output, count })
+            .unwrap_or_else(|e| TaskResult::Error(e.to_string()));
+        let _ = tx.send(result);
         ctx.request_repaint();
     });
 }

@@ -97,6 +97,7 @@ pub enum TaskResult {
     ArchiveCacheCount(usize),
     ArchiveCacheCleared(usize),
     HistoryLoaded(Vec<crate::db::ScanHistoryEntry>),
+    CsvExported { path: String, count: usize },
     Error(String),
     Info(String),
 }
@@ -375,6 +376,9 @@ impl MediaIndexApp {
                 }
                 TaskResult::HistoryLoaded(h) => {
                     self.scan_history = h;
+                }
+                TaskResult::CsvExported { path, count } => {
+                    self.status_msg = format!("CSV exportado: {count} archivos → {path}");
                 }
                 TaskResult::Error(e) => {
                     self.scanner.is_running = false;
