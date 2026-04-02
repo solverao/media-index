@@ -17,6 +17,10 @@ pub struct ScannerState {
     verbose: bool,
     no_archives: bool,
     skip_small: bool,
+    /// Active exclusion patterns (directory/filename substrings to skip).
+    pub exclude_patterns: Vec<String>,
+    /// Buffer for the "add pattern" text input.
+    exclude_input: String,
 }
 
 impl Default for ScannerState {
@@ -30,6 +34,8 @@ impl Default for ScannerState {
             verbose: false,
             no_archives: false,
             skip_small: true,
+            exclude_patterns: vec![],
+            exclude_input: String::new(),
         }
     }
 }
@@ -66,6 +72,79 @@ pub fn show(
             ui.checkbox(&mut state.skip_small, "Ignorar archivos < 1 KB")
                 .on_hover_text("Omite archivos de sistema, temporales y vacíos (acelera el escaneo)");
         });
+
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new("Excluir directorios / patrones").strong());
+        ui.add_space(2.0);
+
+        // Quick-add buttons for common patterns
+        ui.horizontal_wrapped(|ui: &mut egui::Ui| {
+            for pat in [".git", "node_modules", "__pycache__", ".cache", "Thumbs.db", ".DS_Store", "tmp", "temp"] {
+                let already = state.exclude_patterns.iter().any(|p| p == pat);
+                if already {
+                    ui.add_enabled(
+                        false,
+                        egui::Button::new(format!("✓ {pat}")).small(),
+                    );
+                } else if ui.small_button(format!("+ {pat}")).clicked() {
+                    state.exclude_patterns.push(pat.to_string());
+                }
+            }
+        });
+
+        ui.add_space(2.0);
+        ui.horizontal(|ui: &mut egui::Ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut state.exclude_input)
+                    .hint_text("Patrón personalizado…")
+                    .desired_width(220.0),
+            );
+            let can_add = !state.exclude_input.trim().is_empty()
+                && !state.exclude_patterns.contains(&state.exclude_input.trim().to_string());
+            if ui.add_enabled(can_add, egui::Button::new("Añadir")).clicked()
+                || (ui.input(|i| i.key_pressed(egui::Key::Enter)) && can_add)
+            {
+                state.exclude_patterns.push(state.exclude_input.trim().to_string());
+                state.exclude_input.clear();
+            }
+        });
+
+        // Active patterns — show as chips with × button
+        if !state.exclude_patterns.is_empty() {
+            ui.add_space(2.0);
+            let mut to_remove: Option<usize> = None;
+            ui.horizontal_wrapped(|ui: &mut egui::Ui| {
+                for (i, pat) in state.exclude_patterns.iter().enumerate() {
+                    egui::Frame::default()
+                        .fill(egui::Color32::from_rgb(60, 40, 40))
+                        .rounding(egui::Rounding::same(4.0))
+                        .inner_margin(egui::Margin::symmetric(6.0, 2.0))
+                        .show(ui, |ui: &mut egui::Ui| {
+                            ui.horizontal(|ui: &mut egui::Ui| {
+                                ui.label(
+                                    egui::RichText::new(pat)
+                                        .color(egui::Color32::from_rgb(255, 160, 120)),
+                                );
+                                if ui
+                                    .add(
+                                        egui::Button::new(
+                                            egui::RichText::new("×").color(egui::Color32::GRAY),
+                                        )
+                                        .frame(false)
+                                        .small(),
+                                    )
+                                    .clicked()
+                                {
+                                    to_remove = Some(i);
+                                }
+                            });
+                        });
+                }
+            });
+            if let Some(i) = to_remove {
+                state.exclude_patterns.remove(i);
+            }
+        }
     });
 
     ui.add_space(8.0);
@@ -244,6 +323,7 @@ fn start_scan(
     let verbose = state.verbose;
     let no_archives = state.no_archives;
     let skip_small = state.skip_small;
+    let exclude_patterns = state.exclude_patterns.clone();
     let tx = tx.clone();
 
     std::thread::spawn(move || {
@@ -251,6 +331,7 @@ fn start_scan(
             let db = crate::db::Database::open(&db_path)?;
             let mut scanner = crate::scanner::Scanner::new(db, verbose, no_archives);
             scanner.skip_small = skip_small;
+            scanner.exclude_patterns = exclude_patterns;
             scanner.gui_progress = Some(progress);
             scanner.scan(&path)
         })();

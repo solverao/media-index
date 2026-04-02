@@ -24,6 +24,9 @@ pub struct Scanner {
     no_archives: bool,
     /// Skip files smaller than 1 KB (avoids hashing empty/system/temp files).
     pub skip_small: bool,
+    /// Directory/filename substrings to skip (e.g. "node_modules", ".git").
+    /// Any path whose components contain one of these strings is excluded.
+    pub exclude_patterns: Vec<String>,
     /// Optional GUI progress sink — updated from the worker threads.
     pub gui_progress: Option<Arc<GuiProgress>>,
 }
@@ -35,11 +38,13 @@ impl Scanner {
             verbose,
             no_archives,
             skip_small: true,
+            exclude_patterns: vec![],
             gui_progress: None,
         }
     }
 
     pub fn scan(&self, root: &Path) -> Result<ScanStats> {
+        let scan_start = std::time::Instant::now();
         let stats = Arc::new(Mutex::new(ScanStats::default()));
 
         // Remove stale entries before scanning so that manually deleted files
@@ -84,6 +89,16 @@ impl Scanner {
             .filter(|e| {
                 !self.skip_small
                     || e.metadata().map(|m| m.len() >= 1024).unwrap_or(true)
+            })
+            .filter(|e| {
+                if self.exclude_patterns.is_empty() {
+                    return true;
+                }
+                // Check every component of the path against the exclusion list
+                !e.path().components().any(|c| {
+                    let s = c.as_os_str().to_string_lossy();
+                    self.exclude_patterns.iter().any(|pat| s.contains(pat.as_str()))
+                })
             })
             .map(|e| e.path().to_path_buf())
             .collect();
@@ -266,7 +281,21 @@ impl Scanner {
         });
 
         pb.finish_with_message("done");
-        Ok(Arc::try_unwrap(stats).unwrap().into_inner().unwrap())
+        let final_stats = Arc::try_unwrap(stats).unwrap().into_inner().unwrap();
+
+        // Record this scan in the history table
+        let duration = scan_start.elapsed().as_secs_f64();
+        if let Ok(db) = self.db.lock() {
+            let _ = db.insert_scan_history(
+                &root.to_string_lossy(),
+                duration,
+                final_stats.total_indexed(),
+                final_stats.duplicates,
+                final_stats.errors,
+            );
+        }
+
+        Ok(final_stats)
     }
 
     // ── Build entry without touching DB or stats (heavy work) ────────────

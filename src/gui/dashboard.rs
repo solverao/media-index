@@ -3,7 +3,7 @@ use humansize::{DECIMAL, format_size};
 use std::sync::mpsc;
 
 use super::TaskResult;
-use crate::db::DbStats;
+use crate::db::{DbStats, ScanHistoryEntry};
 
 #[derive(Default)]
 pub struct DashboardState {
@@ -13,6 +13,7 @@ pub struct DashboardState {
 pub fn show(
     ui: &mut egui::Ui,
     state: &mut DashboardState,
+    history: &[ScanHistoryEntry],
     ctx: &egui::Context,
     db_path: &str,
     tx: &mpsc::Sender<TaskResult>,
@@ -39,6 +40,15 @@ pub fn show(
         Some(s) => {
             show_stats(ui, s);
         }
+    }
+
+    if !history.is_empty() {
+        ui.add_space(16.0);
+        ui.separator();
+        ui.add_space(4.0);
+        ui.heading("🕓 Historial de escaneos");
+        ui.add_space(6.0);
+        show_history(ui, history);
     }
 }
 
@@ -135,6 +145,70 @@ fn type_style(t: &str) -> (&'static str, egui::Color32) {
         "other" => ("·", egui::Color32::GRAY),
         _ => ("?", egui::Color32::WHITE),
     }
+}
+
+fn show_history(ui: &mut egui::Ui, history: &[ScanHistoryEntry]) {
+    egui::ScrollArea::vertical()
+        .id_salt("history_scroll")
+        .max_height(220.0)
+        .show(ui, |ui: &mut egui::Ui| {
+            egui::Grid::new("scan_history_grid")
+                .num_columns(6)
+                .striped(true)
+                .spacing([12.0, 4.0])
+                .show(ui, |ui: &mut egui::Ui| {
+                    // Header
+                    ui.label(egui::RichText::new("Fecha").strong());
+                    ui.label(egui::RichText::new("Directorio").strong());
+                    ui.label(egui::RichText::new("Archivos").strong());
+                    ui.label(egui::RichText::new("Dupl.").strong());
+                    ui.label(egui::RichText::new("Errores").strong());
+                    ui.label(egui::RichText::new("Duración").strong());
+                    ui.end_row();
+
+                    for entry in history {
+                        ui.label(
+                            egui::RichText::new(&entry.scanned_at)
+                                .weak()
+                                .monospace(),
+                        );
+
+                        let path_display = if entry.scanned_path.len() > 40 {
+                            format!("…{}", &entry.scanned_path[entry.scanned_path.len() - 37..])
+                        } else {
+                            entry.scanned_path.clone()
+                        };
+                        ui.label(&path_display)
+                            .on_hover_text(&entry.scanned_path);
+
+                        ui.label(entry.files_indexed.to_string());
+
+                        let dup_color = if entry.duplicates > 0 {
+                            egui::Color32::from_rgb(255, 120, 80)
+                        } else {
+                            egui::Color32::from_rgb(100, 200, 100)
+                        };
+                        ui.colored_label(dup_color, entry.duplicates.to_string());
+
+                        let err_color = if entry.errors > 0 {
+                            egui::Color32::from_rgb(255, 180, 50)
+                        } else {
+                            egui::Color32::GRAY
+                        };
+                        ui.colored_label(err_color, entry.errors.to_string());
+
+                        let dur = entry.duration_secs;
+                        let dur_str = if dur < 60.0 {
+                            format!("{dur:.1}s")
+                        } else {
+                            format!("{}m {:.0}s", dur as u64 / 60, dur % 60.0)
+                        };
+                        ui.label(egui::RichText::new(dur_str).weak());
+
+                        ui.end_row();
+                    }
+                });
+        });
 }
 
 pub fn load(ctx: egui::Context, db_path: &str, tx: &mpsc::Sender<TaskResult>) {

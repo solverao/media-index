@@ -96,6 +96,7 @@ pub enum TaskResult {
     CleanDone(usize),
     ArchiveCacheCount(usize),
     ArchiveCacheCleared(usize),
+    HistoryLoaded(Vec<crate::db::ScanHistoryEntry>),
     Error(String),
     Info(String),
 }
@@ -161,6 +162,7 @@ pub struct MediaIndexApp {
     result_rx: mpsc::Receiver<TaskResult>,
 
     pub dashboard: DashboardState,
+    pub scan_history: Vec<crate::db::ScanHistoryEntry>,
     pub scanner: ScannerState,
     pub browser: BrowserState,
     pub dupes: DupesState,
@@ -185,6 +187,7 @@ impl MediaIndexApp {
             result_tx: tx,
             result_rx: rx,
             dashboard: DashboardState::default(),
+            scan_history: vec![],
             scanner: ScannerState::default(),
             browser: BrowserState::default(),
             dupes: DupesState::default(),
@@ -218,6 +221,16 @@ impl MediaIndexApp {
             match crate::db::Database::open(&db_path).and_then(|db| db.stats()) {
                 Ok(s) => TaskResult::StatsLoaded(s),
                 Err(e) => TaskResult::Error(e.to_string()),
+            }
+        });
+    }
+
+    pub fn load_scan_history(&mut self, ctx: egui::Context) {
+        let db_path = self.db_path.clone();
+        self.spawn(ctx, move || {
+            match crate::db::Database::open(&db_path).and_then(|db| db.get_scan_history(20)) {
+                Ok(h) => TaskResult::HistoryLoaded(h),
+                Err(_) => TaskResult::HistoryLoaded(vec![]),
             }
         });
     }
@@ -298,7 +311,7 @@ impl MediaIndexApp {
         });
     }
 
-    fn process_results(&mut self) {
+    fn process_results(&mut self, ctx: &egui::Context) {
         while let Ok(result) = self.result_rx.try_recv() {
             self.is_loading = false;
             match result {
@@ -310,6 +323,8 @@ impl MediaIndexApp {
                     self.scanner.progress = None;
                     self.scanner.last_stats = Some(s);
                     self.scanner.log.push("Scan complete.".into());
+                    // Refresh history after each scan
+                    self.load_scan_history(ctx.clone());
                 }
                 TaskResult::SearchResults(r) => {
                     self.browser.results = r;
@@ -358,6 +373,9 @@ impl MediaIndexApp {
                     self.maintenance.archive_cache_count = Some(0);
                     self.maintenance.clean_result = Some(n);
                 }
+                TaskResult::HistoryLoaded(h) => {
+                    self.scan_history = h;
+                }
                 TaskResult::Error(e) => {
                     self.scanner.is_running = false;
                     self.status_msg = format!("Error: {e}");
@@ -386,6 +404,7 @@ impl MediaIndexApp {
                     self.db_path = self.db_path_input.clone();
                     self.status_msg.clear();
                     self.load_stats(ctx.clone());
+                    self.load_scan_history(ctx.clone());
                 }
                 if self.is_loading || self.scanner.is_running {
                     ui.spinner();
@@ -424,7 +443,10 @@ impl MediaIndexApp {
                     if btn.clicked() {
                         self.active_view = *view;
                         match view {
-                            View::Dashboard => self.load_stats(ctx.clone()),
+                            View::Dashboard => {
+                                self.load_stats(ctx.clone());
+                                self.load_scan_history(ctx.clone());
+                            }
                             View::Duplicates => self.load_dupes(ctx.clone()),
                             View::Thumbnails => self.load_thumbs(ctx.clone()),
                             _ => {}
@@ -670,7 +692,7 @@ impl MediaIndexApp {
 
 impl eframe::App for MediaIndexApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.process_results();
+        self.process_results(ctx);
 
         // Keep repainting while a background task is running
         if self.is_loading || self.scanner.is_running || self.maintenance.thumb_progress.is_some() {
@@ -682,7 +704,7 @@ impl eframe::App for MediaIndexApp {
 
         egui::CentralPanel::default().show(ctx, |ui| match self.active_view {
             View::Dashboard => {
-                dashboard::show(ui, &mut self.dashboard, ctx, &self.db_path, &self.result_tx)
+                dashboard::show(ui, &mut self.dashboard, &self.scan_history, ctx, &self.db_path, &self.result_tx)
             }
             View::Scanner => {
                 scanner_view::show(ui, &mut self.scanner, ctx, &self.db_path, &self.result_tx)

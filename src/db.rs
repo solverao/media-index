@@ -128,6 +128,17 @@ impl Database {
                 size  INTEGER NOT NULL
             );
 
+            -- Scan history
+            CREATE TABLE IF NOT EXISTS scan_history (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                scanned_path  TEXT    NOT NULL,
+                scanned_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+                duration_secs REAL    NOT NULL DEFAULT 0,
+                files_indexed INTEGER NOT NULL DEFAULT 0,
+                duplicates    INTEGER NOT NULL DEFAULT 0,
+                errors        INTEGER NOT NULL DEFAULT 0
+            );
+
             -- Indexes
             CREATE INDEX IF NOT EXISTS idx_files_hash      ON files(blake3_hash);
             CREATE INDEX IF NOT EXISTS idx_files_type      ON files(media_type);
@@ -165,6 +176,18 @@ impl Database {
         let _ = self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_files_path ON files(current_path)",
             [],
+        );
+        // Migration: create scan_history if it does not exist
+        let _ = self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS scan_history (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                scanned_path  TEXT    NOT NULL,
+                scanned_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+                duration_secs REAL    NOT NULL DEFAULT 0,
+                files_indexed INTEGER NOT NULL DEFAULT 0,
+                duplicates    INTEGER NOT NULL DEFAULT 0,
+                errors        INTEGER NOT NULL DEFAULT 0
+            );",
         );
 
         Ok(())
@@ -1132,6 +1155,48 @@ impl Database {
             })
             .collect())
     }
+
+    // ── Scan history ──────────────────────────────────────────────────────
+
+    pub fn insert_scan_history(
+        &self,
+        scanned_path: &str,
+        duration_secs: f64,
+        files_indexed: usize,
+        duplicates: usize,
+        errors: usize,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO scan_history (scanned_path, duration_secs, files_indexed, duplicates, errors)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![scanned_path, duration_secs, files_indexed as i64, duplicates as i64, errors as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Returns the last `limit` scan history entries, most recent first.
+    pub fn get_scan_history(&self, limit: usize) -> Result<Vec<ScanHistoryEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT scanned_path, scanned_at, duration_secs, files_indexed, duplicates, errors
+             FROM scan_history
+             ORDER BY id DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![limit as i64], |r| {
+                Ok(ScanHistoryEntry {
+                    scanned_path: r.get(0)?,
+                    scanned_at: r.get(1)?,
+                    duration_secs: r.get(2)?,
+                    files_indexed: r.get::<_, i64>(3)? as usize,
+                    duplicates: r.get::<_, i64>(4)? as usize,
+                    errors: r.get::<_, i64>(5)? as usize,
+                })
+            })?
+            .filter_map(ok_or_log)
+            .collect();
+        Ok(rows)
+    }
 }
 
 // ── Private similarity helpers ────────────────────────────────────────────
@@ -1148,6 +1213,15 @@ pub struct CachedFile {
     pub blake3_hash: String,
     pub size_bytes: u64,
     pub mtime: Option<u64>,
+}
+
+pub struct ScanHistoryEntry {
+    pub scanned_path: String,
+    pub scanned_at: String,
+    pub duration_secs: f64,
+    pub files_indexed: usize,
+    pub duplicates: usize,
+    pub errors: usize,
 }
 
 pub struct DbStats {
