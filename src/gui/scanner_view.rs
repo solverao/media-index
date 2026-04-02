@@ -6,7 +6,6 @@ use std::sync::{mpsc, Arc};
 use super::TaskResult;
 use crate::models::{GuiProgress, ScanStats};
 
-#[derive(Default)]
 pub struct ScannerState {
     pub is_running: bool,
     pub last_stats: Option<ScanStats>,
@@ -17,6 +16,22 @@ pub struct ScannerState {
     scan_path: String,
     verbose: bool,
     no_archives: bool,
+    skip_small: bool,
+}
+
+impl Default for ScannerState {
+    fn default() -> Self {
+        Self {
+            is_running: false,
+            last_stats: None,
+            log: vec![],
+            progress: None,
+            scan_path: String::new(),
+            verbose: false,
+            no_archives: false,
+            skip_small: true,
+        }
+    }
 }
 
 pub fn show(
@@ -48,6 +63,8 @@ pub fn show(
         ui.horizontal(|ui| {
             ui.checkbox(&mut state.verbose, "Verbose");
             ui.checkbox(&mut state.no_archives, "Ignorar archivos comprimidos");
+            ui.checkbox(&mut state.skip_small, "Ignorar archivos < 1 KB")
+                .on_hover_text("Omite archivos de sistema, temporales y vacíos (acelera el escaneo)");
         });
     });
 
@@ -226,12 +243,14 @@ fn start_scan(
     let db_path = db_path.to_string();
     let verbose = state.verbose;
     let no_archives = state.no_archives;
+    let skip_small = state.skip_small;
     let tx = tx.clone();
 
     std::thread::spawn(move || {
         let result = (|| -> anyhow::Result<ScanStats> {
             let db = crate::db::Database::open(&db_path)?;
             let mut scanner = crate::scanner::Scanner::new(db, verbose, no_archives);
+            scanner.skip_small = skip_small;
             scanner.gui_progress = Some(progress);
             scanner.scan(&path)
         })();

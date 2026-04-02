@@ -22,6 +22,8 @@ pub struct Scanner {
     db: Arc<Mutex<Database>>,
     verbose: bool,
     no_archives: bool,
+    /// Skip files smaller than 1 KB (avoids hashing empty/system/temp files).
+    pub skip_small: bool,
     /// Optional GUI progress sink — updated from the worker threads.
     pub gui_progress: Option<Arc<GuiProgress>>,
 }
@@ -32,6 +34,7 @@ impl Scanner {
             db: Arc::new(Mutex::new(db)),
             verbose,
             no_archives,
+            skip_small: true,
             gui_progress: None,
         }
     }
@@ -78,6 +81,10 @@ impl Scanner {
                 }
             })
             .filter(|e| e.file_type().is_file())
+            .filter(|e| {
+                !self.skip_small
+                    || e.metadata().map(|m| m.len() >= 1024).unwrap_or(true)
+            })
             .map(|e| e.path().to_path_buf())
             .collect();
 
