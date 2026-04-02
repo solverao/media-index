@@ -101,13 +101,19 @@ fn parse_fraction(s: &str) -> Option<f64> {
     Some(num / den)
 }
 
-/// Checks if ffprobe is available in PATH
+/// Checks if ffprobe is available in PATH.
+/// Result is cached after the first check (Fix #18).
 pub fn ffprobe_available() -> bool {
-    Command::new("ffprobe")
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        Command::new("ffprobe")
+            .arg("-version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
 }
 
 #[cfg(test)]

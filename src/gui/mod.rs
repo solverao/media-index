@@ -18,7 +18,16 @@ pub(super) fn open_path(path: &str) {
     }
     // 3. D-Bus FileManager1 (works in WSLg and any session with a file manager)
     //    ShowFolders for directories, ShowItems for files (reveals in parent folder)
-    let uri = format!("file://{path}");
+    // Fix #17: percent-encode the path so spaces and special chars produce valid URIs
+    let encoded: String = path
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
+            | b'-' | b'_' | b'.' | b'~' | b'/' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect();
+    let uri = format!("file://{encoded}");
     let method = if std::path::Path::new(path).is_dir() {
         "org.freedesktop.FileManager1.ShowFolders"
     } else {

@@ -19,8 +19,11 @@ fn parse_stl(data: &[u8]) -> Meta3D {
         return meta;
     }
 
-    let is_ascii =
-        data.starts_with(b"solid ") && std::str::from_utf8(&data[..data.len().min(256)]).is_ok();
+    // Fix #11: A binary STL may start with "solid " in its 80-byte header.
+    // Verify that the file also contains "facet normal" to confirm it's ASCII.
+    let is_ascii = data.starts_with(b"solid ")
+        && std::str::from_utf8(&data[..data.len().min(1024)]).is_ok()
+        && data.windows(12).any(|w| w.starts_with(b"facet normal"));
 
     if is_ascii {
         let text = String::from_utf8_lossy(data);

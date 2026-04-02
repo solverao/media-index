@@ -81,9 +81,18 @@ pub fn extract_entry_bytes(archive_path: &str, inner_name: &str) -> Result<Vec<u
                 .args(["x", "-y", "-inul", archive_path])
                 .arg(&tmp)
                 .status()?;
+            // Path traversal protection (Fix #3)
+            let tmp_canonical = tmp.canonicalize().unwrap_or_else(|_| tmp.clone());
             let target = walkdir::WalkDir::new(&tmp)
                 .into_iter()
                 .flatten()
+                .filter(|e| {
+                    // Ensure file is within the temp directory
+                    e.path()
+                        .canonicalize()
+                        .map(|c| c.starts_with(&tmp_canonical))
+                        .unwrap_or(false)
+                })
                 .find(|e| {
                     e.file_type().is_file() && {
                         let name = e.file_name().to_string_lossy();
@@ -121,7 +130,11 @@ pub fn extract_media_files(path: &Path, archive_type: &ArchiveType) -> Result<Ve
     }
 }
 
-const MAX_IN_MEMORY: u64 = 2 * 1024 * 1024 * 1024; // 2 GB
+const MAX_IN_MEMORY: u64 = 2 * 1024 * 1024 * 1024; // 2 GB per file
+
+/// Maximum total bytes to extract from a single archive.
+/// Prevents ZIP bombs from exhausting available RAM.
+const MAX_TOTAL_EXTRACT: u64 = 4 * 1024 * 1024 * 1024; // 4 GB total
 
 /// Returns true if the entry is macOS-generated junk that should not be indexed:
 /// - __MACOSX/ folder (HFS+ metadata embedded in ZIPs created on macOS)
@@ -162,9 +175,10 @@ fn extract_zip(path: &Path) -> Result<Vec<ExtractedFile>> {
     let mut archive = zip::ZipArchive::new(file)?;
     let mut results = vec![];
     let mut entries_read = 0usize;
+    let mut total_extracted: u64 = 0;
 
     for i in 0..archive.len() {
-        if entries_read >= MAX_ARCHIVE_ENTRIES {
+        if entries_read >= MAX_ARCHIVE_ENTRIES || total_extracted > MAX_TOTAL_EXTRACT {
             break;
         }
 
@@ -190,6 +204,7 @@ fn extract_zip(path: &Path) -> Result<Vec<ExtractedFile>> {
         if std::io::copy(&mut entry, &mut data).is_err() {
             continue;
         }
+        total_extracted += data.len() as u64;
         results.push(ExtractedFile { name, data, ext });
     }
     Ok(results)
@@ -201,12 +216,13 @@ fn extract_7z(path: &Path) -> Result<Vec<ExtractedFile>> {
     let mut archive = SevenZReader::open(path, sevenz_rust::Password::empty())?;
     let mut results = vec![];
     let mut entries_read = 0usize;
+    let mut total_extracted: u64 = 0;
 
     archive.for_each_entries(|entry, reader| {
         if entry.is_directory() {
             return Ok(true);
         }
-        if entries_read >= MAX_ARCHIVE_ENTRIES {
+        if entries_read >= MAX_ARCHIVE_ENTRIES || total_extracted > MAX_TOTAL_EXTRACT {
             return Ok(false);
         }
         let name = entry.name().to_string();
@@ -221,6 +237,7 @@ fn extract_7z(path: &Path) -> Result<Vec<ExtractedFile>> {
         }
         let mut data = Vec::with_capacity(entry.size() as usize);
         if std::io::copy(reader, &mut data).is_ok() {
+            total_extracted += data.len() as u64;
             results.push(ExtractedFile { name, data, ext });
             entries_read += 1;
         }
@@ -233,8 +250,18 @@ fn extract_7z(path: &Path) -> Result<Vec<ExtractedFile>> {
 fn extract_rar(path: &Path) -> Result<Vec<ExtractedFile>> {
     use std::process::Command;
 
-    let check = Command::new("unrar").arg("--help").output();
-    if check.is_err() {
+    // Cache unrar availability to avoid forking on every RAR (Fix #14)
+    static UNRAR_AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let available = *UNRAR_AVAILABLE.get_or_init(|| {
+        Command::new("unrar")
+            .arg("--help")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    });
+    if !available {
         anyhow::bail!(
             "unrar not found. Install with:\n\
              Debian/Ubuntu: sudo apt install unrar\n\
@@ -267,14 +294,41 @@ fn extract_rar(path: &Path) -> Result<Vec<ExtractedFile>> {
         .arg(&tmp)
         .status()?;
 
+    // Canonicalize the temp dir for path traversal checks (Fix #3)
+    let tmp_canonical = match tmp.canonicalize() {
+        Ok(c) => c,
+        Err(_) => {
+            let _ = std::fs::remove_dir_all(&tmp);
+            return Ok(vec![]);
+        }
+    };
+
     let mut results = vec![];
     let mut entries_read = 0usize;
+    let mut total_extracted: u64 = 0;
 
     for entry in walkdir::WalkDir::new(&tmp).into_iter().flatten() {
         if entries_read >= MAX_ARCHIVE_ENTRIES {
             break;
         }
+        // Total memory limit across all entries (Fix #15)
+        if total_extracted > MAX_TOTAL_EXTRACT {
+            break;
+        }
         if !entry.file_type().is_file() {
+            continue;
+        }
+
+        // Path traversal protection: ensure the file is inside the temp dir (Fix #3)
+        let entry_canonical = match entry.path().canonicalize() {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        if !entry_canonical.starts_with(&tmp_canonical) {
+            eprintln!(
+                "  ⚠ Path traversal detected in RAR, skipping: {}",
+                entry.path().display()
+            );
             continue;
         }
 
@@ -297,6 +351,7 @@ fn extract_rar(path: &Path) -> Result<Vec<ExtractedFile>> {
         }
 
         if let Ok(data) = std::fs::read(entry.path()) {
+            total_extracted += data.len() as u64;
             results.push(ExtractedFile { name, data, ext });
             entries_read += 1;
         }

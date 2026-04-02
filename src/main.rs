@@ -85,6 +85,11 @@ enum Commands {
         /// Default: uses copy_score heuristic (keeps the most "original-looking" file).
         #[arg(long, value_name = "RULE")]
         keep: Option<String>,
+        /// With --delete: also delete duplicates detected via partial hash (files >100 MB).
+        /// Without this flag, large files with approximate hashes are skipped during deletion
+        /// to avoid accidental data loss from false-positive matches.
+        #[arg(long)]
+        force_partial: bool,
     },
 
     /// Find visually or tonally similar files (images by perceptual hash, audio by tags)
@@ -252,6 +257,7 @@ fn main() -> Result<()> {
             aggressive,
             prefer_archive,
             keep,
+            force_partial,
         } => cmd_dupes(
             db,
             r#type,
@@ -261,6 +267,7 @@ fn main() -> Result<()> {
             aggressive,
             prefer_archive,
             keep,
+            force_partial,
         ),
         Commands::Search { query, r#type } => cmd_search(db, &query, r#type),
         Commands::Export { output } => cmd_export(db, &output),
@@ -529,8 +536,12 @@ fn cmd_dupes(
     aggressive: bool,
     prefer_archive: bool,
     keep: Option<String>,
+    force_partial: bool,
 ) -> Result<()> {
     use models::KeepRule;
+
+    /// Files above this size are only partially hashed (head+tail).
+    const PARTIAL_HASH_THRESHOLD: u64 = 100 * 1024 * 1024;
 
     let keep_rule: Option<KeepRule> = match &keep {
         None => None,
@@ -589,6 +600,35 @@ fn cmd_dupes(
     );
 
     if delete {
+        // Fix #4: skip groups with partial hashes unless --force-partial is set.
+        // Files >100 MB are only partially hashed — false positives are possible.
+        let skipped_count = if force_partial {
+            0
+        } else {
+            let before = groups.len();
+            groups.retain(|g| g.size_bytes <= PARTIAL_HASH_THRESHOLD);
+            before - groups.len()
+        };
+
+        if skipped_count > 0 {
+            println!(
+                "{} {} group(s) skipped — files >100 MB have approximate hashes.",
+                "⚠".yellow().bold(),
+                skipped_count.to_string().yellow()
+            );
+            println!(
+                "  {} Use {} with {} to include them.\n",
+                "→".dimmed(),
+                "--force-partial".bold(),
+                "--delete".bold()
+            );
+        }
+
+        if groups.is_empty() {
+            println!("{}", "No deletable duplicates remaining.".green());
+            return Ok(());
+        }
+
         return cmd_dupes_delete(
             &db,
             &groups,

@@ -2,6 +2,20 @@ use crate::models::*;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
 
+/// Helper: replaces `.filter_map(|r| r.ok())` throughout the DB layer,
+/// logging errors in debug builds so corrupt rows don't vanish silently (Fix #13).
+fn ok_or_log<T, E: std::fmt::Debug>(r: std::result::Result<T, E>) -> Option<T> {
+    match r {
+        Ok(v) => Some(v),
+        Err(e) => {
+            if cfg!(debug_assertions) {
+                eprintln!("  [db] row error: {e:?}");
+            }
+            None
+        }
+    }
+}
+
 pub struct Database {
     conn: Connection,
 }
@@ -419,77 +433,125 @@ impl Database {
     /// Should be called at the start of each scan so that manually deleted
     /// duplicates do not persist in the DB.
     ///
+    /// Fix #7: processes in batches of 1000 rows instead of loading entire
+    /// tables into memory. Caches path-existence checks to avoid redundant
+    /// filesystem calls for the same archive referenced by many entries.
+    ///
     /// Returns (canonical_files_removed, duplicates_removed).
     pub fn cleanup_stale(&self) -> Result<(usize, usize)> {
-        // 1. Duplicates whose duplicate_path no longer exists
-        let dup_paths: Vec<(i64, String)> = {
-            let mut stmt = self
-                .conn
-                .prepare("SELECT id, duplicate_path FROM duplicates")?;
-            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-                .filter_map(|r| r.ok())
-                .collect()
+        // Cache for path existence checks: avoids redundant stat() calls
+        // when many entries reference the same archive path.
+        let mut exists_cache: std::collections::HashMap<String, bool> =
+            std::collections::HashMap::new();
+        let path_exists_cached = |cache: &mut std::collections::HashMap<String, bool>, p: &str| -> bool {
+            if let Some(&v) = cache.get(p) {
+                return v;
+            }
+            let v = std::path::Path::new(p).exists();
+            cache.insert(p.to_string(), v);
+            v
         };
 
-        let mut dupes_removed = 0usize;
-        for (id, path) in &dup_paths {
-            let stale = if let Some(archive) =
-                path.splitn(2, "::").next().filter(|_| path.contains("::"))
-            {
-                // Entry inside an archive: stale if the archive no longer exists
-                !std::path::Path::new(archive).exists()
+        let is_stale = |cache: &mut std::collections::HashMap<String, bool>, path: &str| -> bool {
+            if let Some(archive) = path.splitn(2, "::").next().filter(|_| path.contains("::")) {
+                !path_exists_cached(cache, archive)
             } else {
-                !std::path::Path::new(path).exists()
-            };
-            if stale {
-                self.conn.execute(
-                    "DELETE FROM duplicates WHERE id = ?1",
-                    rusqlite::params![id],
+                !path_exists_cached(cache, path)
+            }
+        };
+
+        const BATCH_SIZE: i64 = 1000;
+
+        // 1. Duplicates whose duplicate_path no longer exists
+        let mut dupes_removed = 0usize;
+        let mut last_id: i64 = 0;
+        loop {
+            let batch: Vec<(i64, String)> = {
+                let mut stmt = self.conn.prepare(
+                    "SELECT id, duplicate_path FROM duplicates WHERE id > ?1 ORDER BY id LIMIT ?2",
                 )?;
-                dupes_removed += 1;
+                let rows = stmt.query_map(rusqlite::params![last_id, BATCH_SIZE], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?
+                .filter_map(ok_or_log)
+                .collect();
+                rows
+            };
+            if batch.is_empty() {
+                break;
+            }
+            last_id = batch.last().unwrap().0;
+            let stale_ids: Vec<i64> = batch
+                .iter()
+                .filter(|(_, path)| is_stale(&mut exists_cache, path))
+                .map(|(id, _)| *id)
+                .collect();
+            if !stale_ids.is_empty() {
+                let placeholders = stale_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let sql = format!("DELETE FROM duplicates WHERE id IN ({placeholders})");
+                self.conn.execute(
+                    &sql,
+                    rusqlite::params_from_iter(stale_ids.iter()),
+                )?;
+                dupes_removed += stale_ids.len();
             }
         }
 
         // 2. Canonical files whose current_path no longer exists
         // (ON DELETE CASCADE cleans up duplicates + meta_* automatically)
-        let file_paths: Vec<(i64, String)> = {
-            let mut stmt = self.conn.prepare("SELECT id, current_path FROM files")?;
-            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-                .filter_map(|r| r.ok())
-                .collect()
-        };
-
         let mut files_removed = 0usize;
-        for (id, path) in &file_paths {
-            let stale = if let Some(archive) =
-                path.splitn(2, "::").next().filter(|_| path.contains("::"))
-            {
-                // Canonical inside an archive: stale if the archive no longer exists
-                !std::path::Path::new(archive).exists()
-            } else {
-                !std::path::Path::new(path).exists()
+        last_id = 0;
+        loop {
+            let batch: Vec<(i64, String)> = {
+                let mut stmt = self.conn.prepare(
+                    "SELECT id, current_path FROM files WHERE id > ?1 ORDER BY id LIMIT ?2",
+                )?;
+                let rows = stmt.query_map(rusqlite::params![last_id, BATCH_SIZE], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?
+                .filter_map(ok_or_log)
+                .collect();
+                rows
             };
-            if stale {
-                self.conn
-                    .execute("DELETE FROM files WHERE id = ?1", rusqlite::params![id])?;
-                files_removed += 1;
+            if batch.is_empty() {
+                break;
+            }
+            last_id = batch.last().unwrap().0;
+            let stale_ids: Vec<i64> = batch
+                .iter()
+                .filter(|(_, path)| is_stale(&mut exists_cache, path))
+                .map(|(id, _)| *id)
+                .collect();
+            if !stale_ids.is_empty() {
+                let placeholders = stale_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+                let sql = format!("DELETE FROM files WHERE id IN ({placeholders})");
+                self.conn.execute(
+                    &sql,
+                    rusqlite::params_from_iter(stale_ids.iter()),
+                )?;
+                files_removed += stale_ids.len();
             }
         }
 
         // 3. processed_archives entries whose archive file no longer exists
         let archive_paths: Vec<String> = {
             let mut stmt = self.conn.prepare("SELECT path FROM processed_archives")?;
-            stmt.query_map([], |r| r.get(0))?
-                .filter_map(|r| r.ok())
-                .collect()
+            let rows = stmt.query_map([], |r| r.get(0))?
+                .filter_map(ok_or_log)
+                .collect();
+            rows
         };
-        for path in &archive_paths {
-            if !std::path::Path::new(path).exists() {
-                self.conn.execute(
-                    "DELETE FROM processed_archives WHERE path = ?1",
-                    rusqlite::params![path],
-                )?;
-            }
+        let stale_archives: Vec<&String> = archive_paths
+            .iter()
+            .filter(|p| !path_exists_cached(&mut exists_cache, p))
+            .collect();
+        if !stale_archives.is_empty() {
+            let placeholders = stale_archives.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!("DELETE FROM processed_archives WHERE path IN ({placeholders})");
+            self.conn.execute(
+                &sql,
+                rusqlite::params_from_iter(stale_archives.iter()),
+            )?;
         }
 
         Ok((files_removed, dupes_removed))
@@ -521,11 +583,12 @@ impl Database {
                  JOIN duplicates d ON d.canonical_id = f.id
                  WHERE d.duplicate_path LIKE ?2",
             )?;
-            stmt.query_map(params![archive_path, format!("{archive_path}::%")], |r| {
+            let rows = stmt.query_map(params![archive_path, format!("{archive_path}::%")], |r| {
                 r.get(0)
             })?
-            .filter_map(|r| r.ok())
-            .collect()
+            .filter_map(ok_or_log)
+            .collect();
+            rows
         };
 
         // No indexed files found → do not delete (empty or not yet scanned)
@@ -544,9 +607,10 @@ impl Database {
                      JOIN files f ON f.id = d.canonical_id
                      WHERE f.blake3_hash = ?1",
                 )?;
-                stmt.query_map(params![hash], |r| r.get(0))?
-                    .filter_map(|r| r.ok())
-                    .collect()
+                let rows = stmt.query_map(params![hash], |r| r.get(0))?
+                    .filter_map(ok_or_log)
+                    .collect();
+                rows
             };
 
             let has_surviving_copy = copies.iter().any(|copy| {
@@ -595,7 +659,7 @@ impl Database {
             .query_map([], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)? as u64))
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(ok_or_log)
             .collect();
         Ok(results)
     }
@@ -643,23 +707,36 @@ impl Database {
         &self,
         media_type: Option<&str>,
     ) -> Result<Vec<(String, String, String, String)>> {
-        let type_filter = match media_type {
-            Some(t) => format!("media_type = '{t}'"),
-            None => "media_type IN ('image', 'video', '3d')".to_string(),
+        let results = match media_type {
+            Some(t) => {
+                let mut stmt = self.conn.prepare(
+                    "SELECT blake3_hash, current_path, media_type, extension
+                     FROM files
+                     WHERE media_type = ?1
+                     ORDER BY media_type, size_bytes DESC",
+                )?;
+                let rows = stmt.query_map(params![t], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })?
+                .filter_map(ok_or_log)
+                .collect();
+                rows
+            }
+            None => {
+                let mut stmt = self.conn.prepare(
+                    "SELECT blake3_hash, current_path, media_type, extension
+                     FROM files
+                     WHERE media_type IN ('image', 'video', '3d')
+                     ORDER BY media_type, size_bytes DESC",
+                )?;
+                let rows = stmt.query_map([], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })?
+                .filter_map(ok_or_log)
+                .collect();
+                rows
+            }
         };
-
-        let sql = format!(
-            "SELECT blake3_hash, current_path, media_type, extension
-             FROM files
-             WHERE {type_filter}
-             ORDER BY media_type, size_bytes DESC"
-        );
-
-        let mut stmt = self.conn.prepare(&sql)?;
-        let results = stmt
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-            .filter_map(|r| r.ok())
-            .collect();
 
         Ok(results)
     }
@@ -683,7 +760,7 @@ impl Database {
             .query_map(rusqlite::params_from_iter(hashes.iter()), |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
             })?
-            .filter_map(|r| r.ok())
+            .filter_map(ok_or_log)
             .collect();
         Ok(results)
     }
@@ -714,9 +791,10 @@ impl Database {
                 "SELECT media_type, COUNT(*), COALESCE(SUM(size_bytes),0)
                  FROM files GROUP BY media_type ORDER BY 2 DESC",
             )?;
-            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-                .filter_map(|r| r.ok())
-                .collect()
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .filter_map(ok_or_log)
+                .collect();
+            rows
         };
 
         Ok(DbStats {
@@ -752,7 +830,7 @@ impl Database {
                 r.get::<_, String>(5)?,
             ))
         })?
-        .filter_map(|r| r.ok())
+        .filter_map(ok_or_log)
         .for_each(|(hash, name, path, size, mtype, dupe)| {
             let entry = groups.entry(hash.clone()).or_insert(DuplicateGroup {
                 hash,
@@ -772,70 +850,88 @@ impl Database {
 
     pub fn search(&self, query: &str, media_type: Option<&str>) -> Result<Vec<SearchResult>> {
         let pattern = format!("%{query}%");
-        let type_filter = media_type
-            .map(|t| format!("AND f.media_type = '{t}'"))
-            .unwrap_or_default();
+        let has_type = media_type.is_some();
 
-        let sql = format!(
-            "
-            SELECT f.id, f.original_name, f.current_path, f.media_type,
-                   f.size_bytes, f.extension,
-                   a.duration_secs, a.artist, a.title as audio_title, a.album,
-                   v.duration_secs, v.width, v.height, v.title as video_title,
-                   i.width, i.height, i.camera_model,
-                   d.triangle_count
-            FROM files f
-            LEFT JOIN meta_audio a ON a.file_id = f.id
-            LEFT JOIN meta_video v ON v.file_id = f.id
-            LEFT JOIN meta_image i ON i.file_id = f.id
-            LEFT JOIN meta_3d   d ON d.file_id  = f.id
-            WHERE f.original_name LIKE ?1 {type_filter}
-            ORDER BY f.original_name
-            LIMIT 200
-        "
-        );
+        let sql = if has_type {
+            "SELECT f.id, f.original_name, f.current_path, f.media_type,
+                    f.size_bytes, f.extension,
+                    a.duration_secs, a.artist, a.title as audio_title, a.album,
+                    v.duration_secs, v.width, v.height, v.title as video_title,
+                    i.width, i.height, i.camera_model,
+                    d.triangle_count
+             FROM files f
+             LEFT JOIN meta_audio a ON a.file_id = f.id
+             LEFT JOIN meta_video v ON v.file_id = f.id
+             LEFT JOIN meta_image i ON i.file_id = f.id
+             LEFT JOIN meta_3d   d ON d.file_id  = f.id
+             WHERE f.original_name LIKE ?1 AND f.media_type = ?2
+             ORDER BY f.original_name
+             LIMIT 200"
+        } else {
+            "SELECT f.id, f.original_name, f.current_path, f.media_type,
+                    f.size_bytes, f.extension,
+                    a.duration_secs, a.artist, a.title as audio_title, a.album,
+                    v.duration_secs, v.width, v.height, v.title as video_title,
+                    i.width, i.height, i.camera_model,
+                    d.triangle_count
+             FROM files f
+             LEFT JOIN meta_audio a ON a.file_id = f.id
+             LEFT JOIN meta_video v ON v.file_id = f.id
+             LEFT JOIN meta_image i ON i.file_id = f.id
+             LEFT JOIN meta_3d   d ON d.file_id  = f.id
+             WHERE f.original_name LIKE ?1
+             ORDER BY f.original_name
+             LIMIT 200"
+        };
 
-        let mut stmt = self.conn.prepare(&sql)?;
-        let results = stmt
-            .query_map(params![pattern], |r| {
-                let media_type_str: String = r.get(3)?;
-                let media_type = MediaType::from_str(&media_type_str);
+        let row_mapper = |r: &rusqlite::Row| {
+            let media_type_str: String = r.get(3)?;
+            let media_type = MediaType::from_str(&media_type_str);
 
-                let detail = match media_type {
-                    MediaType::Audio => SearchDetail::Audio {
-                        duration: r.get(6)?,
-                        artist: r.get(7)?,
-                        title: r.get(8)?,
-                        album: r.get(9)?,
-                    },
-                    MediaType::Video => SearchDetail::Video {
-                        duration: r.get(10)?,
-                        width: r.get(11)?,
-                        height: r.get(12)?,
-                        title: r.get(13)?,
-                    },
-                    MediaType::Image => SearchDetail::Image {
-                        width: r.get(14)?,
-                        height: r.get(15)?,
-                        camera: r.get(16)?,
-                    },
-                    MediaType::Print3D => SearchDetail::Print3D {
-                        triangles: r.get::<_, Option<i64>>(17)?.map(|v| v as u64),
-                    },
-                    MediaType::Other => SearchDetail::Other,
-                };
+            let detail = match media_type {
+                MediaType::Audio => SearchDetail::Audio {
+                    duration: r.get(6)?,
+                    artist: r.get(7)?,
+                    title: r.get(8)?,
+                    album: r.get(9)?,
+                },
+                MediaType::Video => SearchDetail::Video {
+                    duration: r.get(10)?,
+                    width: r.get(11)?,
+                    height: r.get(12)?,
+                    title: r.get(13)?,
+                },
+                MediaType::Image => SearchDetail::Image {
+                    width: r.get(14)?,
+                    height: r.get(15)?,
+                    camera: r.get(16)?,
+                },
+                MediaType::Print3D => SearchDetail::Print3D {
+                    triangles: r.get::<_, Option<i64>>(17)?.map(|v| v as u64),
+                },
+                MediaType::Other => SearchDetail::Other,
+            };
 
-                Ok(SearchResult {
-                    name: r.get(1)?,
-                    path: r.get(2)?,
-                    media_type: media_type_str,
-                    size_bytes: r.get::<_, i64>(4)? as u64,
-                    extension: r.get(5)?,
-                    detail,
-                })
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
+            Ok(SearchResult {
+                name: r.get(1)?,
+                path: r.get(2)?,
+                media_type: media_type_str,
+                size_bytes: r.get::<_, i64>(4)? as u64,
+                extension: r.get(5)?,
+                detail,
+            })
+        };
+
+        let mut stmt = self.conn.prepare(sql)?;
+        let results = if let Some(t) = media_type {
+            stmt.query_map(params![pattern, t], row_mapper)?
+                .filter_map(ok_or_log)
+                .collect()
+        } else {
+            stmt.query_map(params![pattern], row_mapper)?
+                .filter_map(ok_or_log)
+                .collect()
+        };
 
         Ok(results)
     }
@@ -844,6 +940,12 @@ impl Database {
 
     /// Groups images by Hamming distance of their phash.
     /// threshold: 0 = identical, ≤10 = very similar, ≤20 = similar.
+    ///
+    /// Uses a bucket-based approach (multi-probe LSH) instead of O(n²)
+    /// brute-force comparison (Fix #6). Each 64-bit hash is split into
+    /// 4 bands of 16 bits; images sharing at least one identical band
+    /// become candidates for exact distance comparison. This reduces
+    /// comparisons from n*(n-1)/2 to roughly n * avg_bucket_size.
     pub fn similar_images(&self, threshold: u32) -> Result<Vec<crate::models::SimilarImageGroup>> {
         use crate::models::{SimilarImageEntry, SimilarImageGroup};
 
@@ -856,11 +958,12 @@ impl Database {
                  WHERE i.phash IS NOT NULL
                  ORDER BY f.size_bytes DESC",
             )?;
-            stmt.query_map([], |r| {
+            let rows = stmt.query_map([], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
             })?
-            .filter_map(|r| r.ok())
-            .collect()
+            .filter_map(ok_or_log)
+            .collect();
+            rows
         };
 
         let n = rows.len();
@@ -868,16 +971,73 @@ impl Database {
             return Ok(vec![]);
         }
 
+        // Pre-decode all phashes to byte arrays for fast comparison
+        let decoded: Vec<Option<Vec<u8>>> = rows
+            .iter()
+            .map(|r| {
+                let s = &r.4;
+                if s.len() % 2 != 0 {
+                    return None;
+                }
+                (0..s.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+                    .collect()
+            })
+            .collect();
+
+        // Build buckets: split each hash into NUM_BANDS bands
+        // Each band is a slice of consecutive bytes used as a bucket key.
+        const NUM_BANDS: usize = 4;
+        let mut buckets: std::collections::HashMap<(usize, Vec<u8>), Vec<usize>> =
+            Default::default();
+
+        for (i, dec) in decoded.iter().enumerate() {
+            if let Some(bytes) = dec {
+                if bytes.is_empty() {
+                    continue;
+                }
+                let band_size = bytes.len() / NUM_BANDS;
+                if band_size == 0 {
+                    continue;
+                }
+                for b in 0..NUM_BANDS {
+                    let start = b * band_size;
+                    let end = if b == NUM_BANDS - 1 { bytes.len() } else { start + band_size };
+                    let key = (b, bytes[start..end].to_vec());
+                    buckets.entry(key).or_default().push(i);
+                }
+            }
+        }
+
         // Union-Find to group by similarity
         let mut parent: Vec<usize> = (0..n).collect();
-        for i in 0..n {
-            for j in (i + 1)..n {
-                if let Some(dist) = phash_distance(&rows[i].4, &rows[j].4) {
-                    if dist <= threshold {
-                        let ri = uf_find(&mut parent, i);
-                        let rj = uf_find(&mut parent, j);
-                        if ri != rj {
-                            parent[ri] = rj;
+
+        // Only compare candidates that share at least one bucket
+        let mut compared: std::collections::HashSet<(usize, usize)> = Default::default();
+        for members in buckets.values() {
+            if members.len() < 2 || members.len() > 1000 {
+                // Skip trivially large buckets (degenerate case)
+                if members.len() > 1000 {
+                    continue;
+                }
+            }
+            for (mi, &i) in members.iter().enumerate() {
+                for &j in &members[mi + 1..] {
+                    let pair = if i < j { (i, j) } else { (j, i) };
+                    if !compared.insert(pair) {
+                        continue; // already compared
+                    }
+                    if let (Some(a), Some(b)) = (&decoded[i], &decoded[j]) {
+                        if a.len() == b.len() {
+                            let dist: u32 = a.iter().zip(b.iter()).map(|(x, y)| (x ^ y).count_ones()).sum();
+                            if dist <= threshold {
+                                let ri = uf_find(&mut parent, i);
+                                let rj = uf_find(&mut parent, j);
+                                if ri != rj {
+                                    parent[ri] = rj;
+                                }
+                            }
                         }
                     }
                 }
@@ -930,7 +1090,7 @@ impl Database {
                    AND a.artist IS NOT NULL AND TRIM(a.artist) != ''
                  ORDER BY LOWER(a.artist), LOWER(a.title)",
             )?;
-            stmt.query_map([], |r| {
+            let rows = stmt.query_map([], |r| {
                 Ok((
                     r.get(0)?,
                     r.get(1)?,
@@ -940,8 +1100,9 @@ impl Database {
                     r.get(5)?,
                 ))
             })?
-            .filter_map(|r| r.ok())
-            .collect()
+            .filter_map(ok_or_log)
+            .collect();
+            rows
         };
 
         let mut map: std::collections::HashMap<
@@ -981,27 +1142,6 @@ fn uf_find(parent: &mut Vec<usize>, mut x: usize) -> usize {
         x = parent[x];
     }
     x
-}
-
-/// Hamming distance between two hex-encoded phashes. Returns None if either string is invalid.
-fn phash_distance(a: &str, b: &str) -> Option<u32> {
-    if a.len() != b.len() || a.len() % 2 != 0 {
-        return None;
-    }
-    let decode = |s: &str| -> Option<Vec<u8>> {
-        (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
-            .collect()
-    };
-    let ab = decode(a)?;
-    let bb = decode(b)?;
-    Some(
-        ab.iter()
-            .zip(bb.iter())
-            .map(|(x, y)| (x ^ y).count_ones())
-            .sum(),
-    )
 }
 
 pub struct CachedFile {

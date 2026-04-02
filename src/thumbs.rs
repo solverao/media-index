@@ -167,15 +167,19 @@ pub fn generate_video_from_archive(
 }
 
 /// Checks if stl-thumb is installed in PATH.
+/// Result is cached after the first check.
 pub fn stl_thumb_available() -> bool {
-    // stl-thumb uses -V for version, not --version
-    std::process::Command::new("stl-thumb")
-        .arg("-V")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        // stl-thumb uses -V for version, not --version
+        std::process::Command::new("stl-thumb")
+            .arg("-V")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    })
 }
 
 /// 3D model thumbnail.
@@ -473,8 +477,11 @@ fn parse_3d_geometry(data: &[u8], ext: &str) -> (Vec<[f32; 3]>, Vec<[usize; 3]>)
 // ── STL ──────────────────────────────────────────────────────────────────
 
 fn parse_stl(data: &[u8]) -> (Vec<[f32; 3]>, Vec<[usize; 3]>) {
-    let is_ascii =
-        data.starts_with(b"solid ") && std::str::from_utf8(&data[..data.len().min(256)]).is_ok();
+    // Fix #11: A binary STL may start with "solid " in its 80-byte header.
+    // Verify that the file also contains "facet normal" to confirm it's ASCII.
+    let is_ascii = data.starts_with(b"solid ")
+        && std::str::from_utf8(&data[..data.len().min(1024)]).is_ok()
+        && data.windows(12).any(|w| w.starts_with(b"facet normal"));
     if is_ascii {
         parse_stl_ascii(data)
     } else {

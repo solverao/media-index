@@ -3,18 +3,12 @@ use crate::models::MetaImage;
 pub fn parse(data: &[u8]) -> MetaImage {
     let mut meta = MetaImage::default();
 
-    // ── Perceptual hash (dHash 8×8) ───────────────────────────────────────
-    // Computed before decoding dimensions to reuse the already-decoded image.
-    // Fails silently for unsupported formats (HEIC, RAW, etc.) — meta.phash stays None.
-    meta.phash = compute_phash(data);
-
-    // ── Dimensions ────────────────────────────────────────────────────────
-    // image::io::Reader is deprecated since image 0.25 → use ImageReader
-    if let Ok(reader) = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format() {
-        if let Ok((w, h)) = reader.into_dimensions() {
-            meta.width = Some(w);
-            meta.height = Some(h);
-        }
+    // ── Decode image once and extract dimensions + phash (Fix #9) ────────
+    // Previously the image was decoded twice: once for phash, once for dimensions.
+    if let Ok(img) = image::load_from_memory(data) {
+        meta.width = Some(img.width());
+        meta.height = Some(img.height());
+        meta.phash = compute_phash_from_image(&img);
     }
 
     // ── EXIF ──────────────────────────────────────────────────────────────
@@ -24,17 +18,16 @@ pub fn parse(data: &[u8]) -> MetaImage {
     meta
 }
 
-/// Computes a dHash 8×8 perceptual hash (64 bits → 16-char hex).
-/// Returns None if the format cannot be decoded.
-fn compute_phash(data: &[u8]) -> Option<String> {
+/// Computes a dHash 8×8 perceptual hash (64 bits → 16-char hex) from a
+/// pre-decoded image. Returns None if hashing fails.
+fn compute_phash_from_image(img: &image::DynamicImage) -> Option<String> {
     use image_hasher::{HashAlg, HasherConfig};
 
-    let img = image::load_from_memory(data).ok()?;
     let hasher = HasherConfig::new()
         .hash_alg(HashAlg::Gradient)
         .hash_size(8, 8)
         .to_hasher();
-    let hash = hasher.hash_image(&img);
+    let hash = hasher.hash_image(img);
     Some(bytes_to_hex(hash.as_bytes()))
 }
 

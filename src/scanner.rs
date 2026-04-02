@@ -62,6 +62,8 @@ impl Scanner {
             // follow_links(true): required for WSL mount points (DrvFs)
             // and network drives exposed as symlinks in the Linux VFS.
             .follow_links(true)
+            // Safety net: prevent infinite loops from circular symlinks (Fix #10)
+            .max_depth(256)
             .into_iter()
             .filter_map(|e| match e {
                 Ok(entry) => Some(entry),
@@ -304,23 +306,30 @@ impl Scanner {
         }
 
         // ── New or modified file: hash and parse ─────────────────────────
-        let hash = hash_file(path, size)?;
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
 
-        let metadata = match media_type {
-            MediaType::Other => Metadata::None,
-            MediaType::Video => Metadata::Video(parsers::video::parse_from_path(&path_str)),
-            _ => {
-                if size <= PARTIAL_HASH_THRESHOLD {
-                    let data = std::fs::read(path)?;
-                    parsers::parse(&data, ext, media_type, &path_str)
-                } else {
-                    Metadata::None
-                }
-            }
+        // For files within the threshold, read once and reuse the buffer
+        // for both hashing and metadata parsing (Fix #5: avoids double I/O).
+        let (hash, metadata) = if size <= PARTIAL_HASH_THRESHOLD {
+            let data = std::fs::read(path)?;
+            let h = blake3::hash(&data).to_hex().to_string();
+            let m = match media_type {
+                MediaType::Other => Metadata::None,
+                MediaType::Video => Metadata::Video(parsers::video::parse_from_path(&path_str)),
+                _ => parsers::parse(&data, ext, media_type, &path_str),
+            };
+            (h, m)
+        } else {
+            // Large file: partial hash (head+tail), no metadata extraction
+            let h = hash_file(path, size)?;
+            let m = match media_type {
+                MediaType::Video => Metadata::Video(parsers::video::parse_from_path(&path_str)),
+                _ => Metadata::None,
+            };
+            (h, m)
         };
 
         Ok(MediaEntry {
